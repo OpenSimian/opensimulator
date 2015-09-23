@@ -39,7 +39,6 @@ using OpenSim.Region.Framework.Interfaces;
 using OpenSim.Region.Framework.Scenes;
 using OpenSim.Services.Interfaces;
 using OpenSim.Tests.Common;
-using OpenSim.Tests.Common.Mock;
 
 namespace OpenSim.Region.CoreModules.Avatar.Inventory.Transfer.Tests
 {
@@ -237,8 +236,8 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Transfer.Tests
             InventoryItemBase receivedItem 
                 = UserInventoryHelpers.GetInventoryItem(m_scene.InventoryService, receiverSp.UUID, "Trash/givenObj");
 
-            InventoryFolderBase trashFolder 
-                = m_scene.InventoryService.GetFolderForType(receiverSp.UUID, AssetType.TrashFolder);
+            InventoryFolderBase trashFolder
+                = m_scene.InventoryService.GetFolderForType(receiverSp.UUID, FolderType.Trash);
 
             Assert.That(receivedItem, Is.Not.Null);
             Assert.That(receivedItem.ID, Is.Not.EqualTo(originalItem.ID));
@@ -430,8 +429,8 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Transfer.Tests
             InventoryFolderBase receivedFolder 
                 = UserInventoryHelpers.GetInventoryFolder(m_scene.InventoryService, receiverSp.UUID, "Trash/f1");
 
-            InventoryFolderBase trashFolder 
-                = m_scene.InventoryService.GetFolderForType(receiverSp.UUID, AssetType.TrashFolder);
+            InventoryFolderBase trashFolder
+                = m_scene.InventoryService.GetFolderForType(receiverSp.UUID, FolderType.Trash);
 
             Assert.That(receivedFolder, Is.Not.Null);
             Assert.That(receivedFolder.ID, Is.Not.EqualTo(originalFolder.ID));

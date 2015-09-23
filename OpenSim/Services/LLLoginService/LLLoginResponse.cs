@@ -191,6 +191,7 @@ namespace OpenSim.Services.LLLoginService
 
         private string currency;
         private string classifiedFee;
+        private int    maxAgentGroups;
 
         static LLLoginResponse()
         {
@@ -227,8 +228,8 @@ namespace OpenSim.Services.LLLoginService
         public LLLoginResponse(UserAccount account, AgentCircuitData aCircuit, GridUserInfo pinfo,
             GridRegion destination, List<InventoryFolderBase> invSkel, FriendInfo[] friendsList, ILibraryService libService,
             string where, string startlocation, Vector3 position, Vector3 lookAt, List<InventoryItemBase> gestures, string message,
-            GridRegion home, IPEndPoint clientIP, string mapTileURL, string profileURL, string openIDURL, string searchURL, string currency,
-            string DSTZone, string destinationsURL, string avatarsURL, string classifiedFee)
+            GridRegion home, IPEndPoint clientIP, string mapTileURL, string searchURL, string currency,
+            string DSTZone, string destinationsURL, string avatarsURL, string classifiedFee, int maxAgentGroups)
             : this()
         {
             FillOutInventoryData(invSkel, libService);
@@ -253,12 +254,13 @@ namespace OpenSim.Services.LLLoginService
             SearchURL = searchURL;
             Currency = currency;
             ClassifiedFee = classifiedFee;
+            MaxAgentGroups = maxAgentGroups;
 
             FillOutHomeData(pinfo, home);
             LookAt = String.Format("[r{0},r{1},r{2}]", lookAt.X, lookAt.Y, lookAt.Z);
 
             FillOutRegionData(destination);
-            // m_log.DebugFormat("[LOGIN RESPONSE] LLLoginResponse create. sizeX=<{0},{1}>", RegionSizeX, RegionSizeY);
+            m_log.DebugFormat("[LOGIN RESPONSE] LLLoginResponse create. sizeX={0}, sizeY={1}", RegionSizeX, RegionSizeY);
 
             FillOutSeedCap(aCircuit, destination, clientIP);
 
@@ -361,7 +363,8 @@ namespace OpenSim.Services.LLLoginService
 
         private void FillOutHomeData(GridUserInfo pinfo, GridRegion home)
         {
-            int x = 1000 * (int)Constants.RegionSize, y = 1000 * (int)Constants.RegionSize;
+            int x = (int)Util.RegionToWorldLoc(1000);
+            int y = (int)Util.RegionToWorldLoc(1000);
             if (home != null)
             {
                 x = home.RegionLocX;
@@ -435,10 +438,23 @@ namespace OpenSim.Services.LLLoginService
             ErrorReason = "key";
             welcomeMessage = "Welcome to OpenSim!";
             seedCapability = String.Empty;
-            home = "{'region_handle':[r" + (1000*Constants.RegionSize).ToString() + ",r" + (1000*Constants.RegionSize).ToString() + "], 'position':[r" +
-                   userProfile.homepos.X.ToString() + ",r" + userProfile.homepos.Y.ToString() + ",r" +
-                   userProfile.homepos.Z.ToString() + "], 'look_at':[r" + userProfile.homelookat.X.ToString() + ",r" +
-                   userProfile.homelookat.Y.ToString() + ",r" + userProfile.homelookat.Z.ToString() + "]}";
+            home = "{'region_handle':[" 
+                    + "r" + Util.RegionToWorldLoc(1000).ToString()
+                    + ","
+                    + "r" + Util.RegionToWorldLoc(1000).ToString()
+                    + "], 'position':["
+                    + "r" + userProfile.homepos.X.ToString()
+                    + ","
+                    + "r" + userProfile.homepos.Y.ToString()
+                    + ","
+                    + "r" + userProfile.homepos.Z.ToString()
+                    + "], 'look_at':["
+                    + "r" + userProfile.homelookat.X.ToString()
+                    + ","
+                    + "r" + userProfile.homelookat.Y.ToString()
+                    + ","
+                    + "r" + userProfile.homelookat.Z.ToString()
+                    + "]}";
             lookAt = "[r0.99949799999999999756,r0.03166859999999999814,r0]";
             RegionX = (uint) 255232;
             RegionY = (uint) 254976;
@@ -469,6 +485,7 @@ namespace OpenSim.Services.LLLoginService
 
             currency = String.Empty;
             ClassifiedFee = "0";
+            MaxAgentGroups = 42;
         }
 
 
@@ -528,12 +545,13 @@ namespace OpenSim.Services.LLLoginService
                 responseData["seed_capability"] = seedCapability;
                 responseData["home"] = home;
                 responseData["look_at"] = lookAt;
+                responseData["max-agent-groups"] = MaxAgentGroups;
                 responseData["message"] = welcomeMessage;
                 responseData["region_x"] = (Int32)(RegionX);
                 responseData["region_y"] = (Int32)(RegionY);
                 responseData["region_size_x"] = (Int32)RegionSizeX;
                 responseData["region_size_y"] = (Int32)RegionSizeY;
-                // m_log.DebugFormat("[LOGIN RESPONSE] returning sizeX=<{0},{1}>", RegionSizeX, RegionSizeY);
+                m_log.DebugFormat("[LOGIN RESPONSE] returning sizeX={0}, sizeY={1}", RegionSizeX, RegionSizeY);
 
                 if (searchURL != String.Empty)
                     responseData["search"] = searchURL;
@@ -655,6 +673,7 @@ namespace OpenSim.Services.LLLoginService
                 map["seed_capability"] = OSD.FromString(seedCapability);
                 map["home"] = OSD.FromString(home);
                 map["look_at"] = OSD.FromString(lookAt);
+                map["max-agent-groups"] = OSD.FromInteger(MaxAgentGroups);
                 map["message"] = OSD.FromString(welcomeMessage);
                 map["region_x"] = OSD.FromInteger(RegionX);
                 map["region_y"] = OSD.FromInteger(RegionY);
@@ -769,7 +788,7 @@ namespace OpenSim.Services.LLLoginService
             Hashtable TempHash;
             foreach (InventoryFolderBase InvFolder in folders)
             {
-                if (InvFolder.ParentID == UUID.Zero && InvFolder.Name == "My Inventory")
+                if (InvFolder.ParentID == UUID.Zero && InvFolder.Name == InventoryFolderBase.ROOT_FOLDER_NAME)
                 {
                     rootID = InvFolder.ID;
                 }
@@ -1086,6 +1105,12 @@ namespace OpenSim.Services.LLLoginService
         {
             get { return classifiedFee; }
             set { classifiedFee = value; }
+        }
+
+        public int MaxAgentGroups
+        {
+            get { return maxAgentGroups; }
+            set { maxAgentGroups = value; }
         }
 
         public string DestinationsURL

@@ -46,6 +46,7 @@ using CoolHTTPListener = HttpServer.HttpListener;
 using HttpListener=System.Net.HttpListener;
 using LogPrio=HttpServer.LogPrio;
 using OpenSim.Framework.Monitoring;
+using System.IO.Compression;
 
 namespace OpenSim.Framework.Servers.HttpServer
 {
@@ -53,6 +54,7 @@ namespace OpenSim.Framework.Servers.HttpServer
     {
         private static readonly ILog m_log = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
         private HttpServerLogWriter httpserverlog = new HttpServerLogWriter();
+        private static Encoding UTF8NoBOM = new System.Text.UTF8Encoding(false);
 
         /// <summary>
         /// This is a pending websocket request before it got an sucessful upgrade response.
@@ -113,7 +115,7 @@ namespace OpenSim.Framework.Servers.HttpServer
 
         protected IPAddress m_listenIPAddress = IPAddress.Any;
 
-        private PollServiceRequestManager m_PollServiceManager;
+        public PollServiceRequestManager PollServiceRequestManager { get; private set; }
 
         public uint SSLPort
         {
@@ -374,7 +376,7 @@ namespace OpenSim.Framework.Servers.HttpServer
             return true;
         }
 
-        private void OnRequest(object source, RequestEventArgs args)
+        public void OnRequest(object source, RequestEventArgs args)
         {
             RequestNumber++;
 
@@ -429,7 +431,7 @@ namespace OpenSim.Framework.Servers.HttpServer
                         psEvArgs.Request(psreq.RequestID, keysvals);
                     }
 
-                    m_PollServiceManager.Enqueue(psreq);
+                    PollServiceRequestManager.Enqueue(psreq);
                 }
                 else
                 {
@@ -491,8 +493,8 @@ namespace OpenSim.Framework.Servers.HttpServer
                 try
                 {
                     byte[] buffer500 = SendHTML500(response);
-                    response.Body.Write(buffer500,0,buffer500.Length);
-                    response.Body.Close();
+                    response.OutputStream.Write(buffer500, 0, buffer500.Length);
+                    response.Send();
                 }
                 catch
                 {
@@ -690,6 +692,23 @@ namespace OpenSim.Framework.Servers.HttpServer
 
                 if (buffer != null)
                 {
+                    if (WebUtil.DebugLevel >= 5)
+                    {
+                        string output = System.Text.Encoding.UTF8.GetString(buffer);
+
+                        if (WebUtil.DebugLevel >= 6)
+                        {
+                            // Always truncate binary blobs. We don't have a ContentType, so detect them using the request name.
+                            if ((requestHandler != null && requestHandler.Name == "GetMesh"))
+                            {
+                                if (output.Length > WebUtil.MaxRequestDiagLength)
+                                    output = output.Substring(0, WebUtil.MaxRequestDiagLength) + "...";
+                            }
+                        }
+
+                        WebUtil.LogResponseDetail(RequestNumber, output);
+                    }
+
                     if (!response.SendChunked && response.ContentLength64 <= 0)
                         response.ContentLength64 = buffer.LongLength;
 
@@ -720,16 +739,16 @@ namespace OpenSim.Framework.Servers.HttpServer
             }
             catch (IOException e)
             {
-                m_log.Error(String.Format("[BASE HTTP SERVER]: HandleRequest() threw {0} ", e.StackTrace), e);
+                m_log.Error("[BASE HTTP SERVER]: HandleRequest() threw exception ", e);
             }
             catch (Exception e)
             {
-                m_log.Error(String.Format("[BASE HTTP SERVER]: HandleRequest() threw {0} ", e.StackTrace), e);
+                m_log.Error("[BASE HTTP SERVER]: HandleRequest() threw exception ", e);
                 try
                 {
                     byte[] buffer500 = SendHTML500(response);
-                    response.Body.Write(buffer500, 0, buffer500.Length);
-                    response.Body.Close();
+                    response.OutputStream.Write(buffer500, 0, buffer500.Length);
+                    response.Send();
                 }
                 catch
                 {
@@ -743,7 +762,7 @@ namespace OpenSim.Framework.Servers.HttpServer
                 if (tickdiff > 3000 && requestHandler != null && requestHandler.Name != "GetTexture")
                 {
                     m_log.InfoFormat(
-                        "[BASE HTTP SERVER]: Slow handling of {0} {1} {2} {3} {4} from {5} took {6}ms",
+                        "[LOGHTTP] Slow handling of {0} {1} {2} {3} {4} from {5} took {6}ms",
                         RequestNumber,
                         requestMethod,
                         uriString,
@@ -755,7 +774,7 @@ namespace OpenSim.Framework.Servers.HttpServer
                 else if (DebugLevel >= 4)
                 {
                     m_log.DebugFormat(
-                        "[BASE HTTP SERVER]: HTTP IN {0} :{1} took {2}ms",
+                        "[LOGHTTP] HTTP IN {0} :{1} took {2}ms",
                         RequestNumber,
                         Port,
                         tickdiff);
@@ -766,7 +785,7 @@ namespace OpenSim.Framework.Servers.HttpServer
         private void LogIncomingToStreamHandler(OSHttpRequest request, IRequestHandler requestHandler)
         {
             m_log.DebugFormat(
-                "[BASE HTTP SERVER]: HTTP IN {0} :{1} stream handler {2} {3} {4} {5} from {6}",
+                "[LOGHTTP] HTTP IN {0} :{1} stream handler {2} {3} {4} {5} from {6}",
                 RequestNumber,
                 Port,
                 request.HttpMethod,
@@ -782,7 +801,7 @@ namespace OpenSim.Framework.Servers.HttpServer
         private void LogIncomingToContentTypeHandler(OSHttpRequest request)
         {
             m_log.DebugFormat(
-                "[BASE HTTP SERVER]: HTTP IN {0} :{1} {2} content type handler {3} {4} from {5}",
+                "[LOGHTTP] HTTP IN {0} :{1} {2} content type handler {3} {4} from {5}",
                 RequestNumber,
                 Port,
                 string.IsNullOrEmpty(request.ContentType) ? "not set" : request.ContentType,
@@ -797,7 +816,7 @@ namespace OpenSim.Framework.Servers.HttpServer
         private void LogIncomingToXmlRpcHandler(OSHttpRequest request)
         {
             m_log.DebugFormat(
-                "[BASE HTTP SERVER]: HTTP IN {0} :{1} assumed generic XMLRPC request {2} {3} from {4}",
+                "[LOGHTTP] HTTP IN {0} :{1} assumed generic XMLRPC request {2} {3} from {4}",
                 RequestNumber,
                 Port,
                 request.HttpMethod,
@@ -810,28 +829,48 @@ namespace OpenSim.Framework.Servers.HttpServer
 
         private void LogIncomingInDetail(OSHttpRequest request)
         {
-            using (StreamReader reader = new StreamReader(Util.Copy(request.InputStream), Encoding.UTF8))
+            if (request.ContentType == "application/octet-stream")
+                return; // never log these; they're just binary data
+
+            Stream inputStream = Util.Copy(request.InputStream);
+            Stream innerStream = null;
+            try
             {
-                string output;
-
-                if (DebugLevel == 5)
+                if ((request.Headers["Content-Encoding"] == "gzip") || (request.Headers["X-Content-Encoding"] == "gzip"))
                 {
-                    const int sampleLength = 80;
-                    char[] sampleChars = new char[sampleLength + 3];
-                    reader.Read(sampleChars, 0, sampleLength);
-                    sampleChars[80] = '.';
-                    sampleChars[81] = '.';
-                    sampleChars[82] = '.';
-                    output = new string(sampleChars);
-                }
-                else
-                {
-                    output = reader.ReadToEnd();
+                    innerStream = inputStream;
+                    inputStream = new GZipStream(innerStream, System.IO.Compression.CompressionMode.Decompress);
                 }
 
-                m_log.DebugFormat("[BASE HTTP SERVER]: {0}", output.Replace("\n", @"\n"));
+                using (StreamReader reader = new StreamReader(inputStream, Encoding.UTF8))
+                {
+                    string output;
+
+                    if (DebugLevel == 5)
+                    {
+                        char[] chars = new char[WebUtil.MaxRequestDiagLength + 1];  // +1 so we know to add "..." only if needed
+                        int len = reader.Read(chars, 0, WebUtil.MaxRequestDiagLength + 1);
+                        output = new string(chars, 0, Math.Min(len, WebUtil.MaxRequestDiagLength));
+                        if (len > WebUtil.MaxRequestDiagLength)
+                            output += "...";
+                    }
+                    else
+                    {
+                        output = reader.ReadToEnd();
+                    }
+
+                    m_log.DebugFormat("[LOGHTTP] {0}", Util.BinaryToASCII(output));
+                }
+            }
+            finally
+            {
+                if (innerStream != null)
+                    innerStream.Dispose();
+                inputStream.Dispose();
             }
         }
+
+        private readonly string HANDLER_SEPARATORS = "/?&#-";
 
         private bool TryGetStreamHandler(string handlerKey, out IRequestHandler streamHandler)
         {
@@ -841,7 +880,8 @@ namespace OpenSim.Framework.Servers.HttpServer
             {
                 foreach (string pattern in m_streamHandlers.Keys)
                 {
-                    if (handlerKey.StartsWith(pattern))
+                    if ((handlerKey == pattern)
+                        || (handlerKey.StartsWith(pattern) && (HANDLER_SEPARATORS.IndexOf(handlerKey[pattern.Length]) >= 0)))
                     {
                         if (String.IsNullOrEmpty(bestMatch) || pattern.Length > bestMatch.Length)
                         {
@@ -871,7 +911,8 @@ namespace OpenSim.Framework.Servers.HttpServer
             {
                 foreach (string pattern in m_pollHandlers.Keys)
                 {
-                    if (handlerKey.StartsWith(pattern))
+                    if ((handlerKey == pattern)
+                        || (handlerKey.StartsWith(pattern) && (HANDLER_SEPARATORS.IndexOf(handlerKey[pattern.Length]) >= 0)))
                     {
                         if (String.IsNullOrEmpty(bestMatch) || pattern.Length > bestMatch.Length)
                         {
@@ -903,7 +944,8 @@ namespace OpenSim.Framework.Servers.HttpServer
             {
                 foreach (string pattern in m_HTTPHandlers.Keys)
                 {
-                    if (handlerKey.StartsWith(pattern))
+                    if ((handlerKey == pattern)
+                        || (handlerKey.StartsWith(pattern) && (HANDLER_SEPARATORS.IndexOf(handlerKey[pattern.Length]) >= 0)))
                     {
                         if (String.IsNullOrEmpty(bestMatch) || pattern.Length > bestMatch.Length)
                         {
@@ -952,16 +994,33 @@ namespace OpenSim.Framework.Servers.HttpServer
         /// <param name="response"></param>
         private byte[] HandleXmlRpcRequests(OSHttpRequest request, OSHttpResponse response)
         {
+            String requestBody;
+
             Stream requestStream = request.InputStream;
+            Stream innerStream = null;
+            try
+            {
+                if ((request.Headers["Content-Encoding"] == "gzip") || (request.Headers["X-Content-Encoding"] == "gzip"))
+                {
+                    innerStream = requestStream;
+                    requestStream = new GZipStream(innerStream, System.IO.Compression.CompressionMode.Decompress);
+                }
 
-            Encoding encoding = Encoding.UTF8;
-            StreamReader reader = new StreamReader(requestStream, encoding);
+                using (StreamReader reader = new StreamReader(requestStream, Encoding.UTF8))
+                {
+                    requestBody = reader.ReadToEnd();
+                }
+            }
+            finally
+            {
+                if (innerStream != null)
+                    innerStream.Dispose();
+                requestStream.Dispose();
+            }
 
-            string requestBody = reader.ReadToEnd();
-            reader.Close();
-            requestStream.Close();
             //m_log.Debug(requestBody);
             requestBody = requestBody.Replace("<base64></base64>", "");
+
             string responseString = String.Empty;
             XmlRpcRequest xmlRprcRequest = null;
 
@@ -1057,18 +1116,16 @@ namespace OpenSim.Framework.Servers.HttpServer
 
                     response.ContentType = "text/xml";
                     using (MemoryStream outs = new MemoryStream())
+                    using (XmlTextWriter writer = new XmlTextWriter(outs, UTF8NoBOM))
                     {
-                        using (XmlTextWriter writer = new XmlTextWriter(outs, Encoding.UTF8))
+                        writer.Formatting = Formatting.None;
+                        XmlRpcResponseSerializer.Singleton.Serialize(writer, xmlRpcResponse);
+                        writer.Flush();
+                        outs.Flush();
+                        outs.Position = 0;
+                        using (StreamReader sr = new StreamReader(outs))
                         {
-                            writer.Formatting = Formatting.None;
-                            XmlRpcResponseSerializer.Singleton.Serialize(writer, xmlRpcResponse);
-                            writer.Flush();
-                            outs.Flush();
-                            outs.Position = 0;
-                            using (StreamReader sr = new StreamReader(outs))
-                            {
-                                responseString = sr.ReadToEnd();
-                            }
+                            responseString = sr.ReadToEnd();
                         }
                     }
                 }
@@ -1781,10 +1838,17 @@ namespace OpenSim.Framework.Servers.HttpServer
 
         public void Start()
         {
-            StartHTTP();
+            Start(true);
         }
 
-        private void StartHTTP()
+        /// <summary>
+        /// Start the http server
+        /// </summary>
+        /// <param name='processPollRequestsAsync'>
+        /// If true then poll responses are performed asynchronsly.
+        /// Option exists to allow regression tests to perform processing synchronously.
+        /// </param>
+        public void Start(bool performPollResponsesAsync)
         {
             m_log.InfoFormat(
                 "[BASE HTTP SERVER]: Starting {0} server on port {1}", UseSSL ? "HTTPS" : "HTTP", Port);
@@ -1822,8 +1886,9 @@ namespace OpenSim.Framework.Servers.HttpServer
                 m_httpListener2.Start(64);
 
                 // Long Poll Service Manager with 3 worker threads a 25 second timeout for no events
-                m_PollServiceManager = new PollServiceRequestManager(this, 3, 25000);
-                m_PollServiceManager.Start();
+                PollServiceRequestManager = new PollServiceRequestManager(this, performPollResponsesAsync, 3, 25000);
+                PollServiceRequestManager.Start();
+
                 HTTPDRunning = true;
 
                 //HttpListenerContext context;
@@ -1892,7 +1957,7 @@ namespace OpenSim.Framework.Servers.HttpServer
 
             try
             {
-                m_PollServiceManager.Stop();
+                PollServiceRequestManager.Stop();
 
                 m_httpListener2.ExceptionThrown -= httpServerException;
                 //m_httpListener2.DisconnectHandler = null;

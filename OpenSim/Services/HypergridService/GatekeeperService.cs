@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) Contributors, http://opensimulator.org/
  * See CONTRIBUTORS.TXT for a full list of copyright holders.
  *
@@ -131,8 +131,11 @@ namespace OpenSim.Services.HypergridService
                 else if (simulationService != string.Empty)
                         m_SimulationService = ServerUtils.LoadPlugin<ISimulationService>(simulationService, args);
 
-                m_AllowedClients = serverConfig.GetString("AllowedClients", string.Empty);
-                m_DeniedClients = serverConfig.GetString("DeniedClients", string.Empty);
+                string[] possibleAccessControlConfigSections = new string[] { "AccessControl", "GatekeeperService" };
+                m_AllowedClients = Util.GetConfigVarFromSections<string>(
+                        config, "AllowedClients", possibleAccessControlConfigSections, string.Empty);
+                m_DeniedClients = Util.GetConfigVarFromSections<string>(
+                        config, "DeniedClients", possibleAccessControlConfigSections, string.Empty); 
                 m_ForeignAgentsAllowed = serverConfig.GetBoolean("ForeignAgentsAllowed", true);
 
                 LoadDomainExceptionsFromConfig(serverConfig, "AllowExcept", m_ForeignsAllowedExceptions);
@@ -204,29 +207,63 @@ namespace OpenSim.Services.HypergridService
             return true;
         }
 
-        public GridRegion GetHyperlinkRegion(UUID regionID)
+        public GridRegion GetHyperlinkRegion(UUID regionID, UUID agentID, string agentHomeURI, out string message)
         {
-            m_log.DebugFormat("[GATEKEEPER SERVICE]: Request to get hyperlink region {0}", regionID);
+            message = null;
 
             if (!m_AllowTeleportsToAnyRegion)
+            {
                 // Don't even check the given regionID
+                m_log.DebugFormat(
+                    "[GATEKEEPER SERVICE]: Returning gateway region {0} {1} @ {2} to user {3}{4} as teleporting to arbitrary regions is not allowed.", 
+                    m_DefaultGatewayRegion.RegionName, 
+                    m_DefaultGatewayRegion.RegionID,
+                    m_DefaultGatewayRegion.ServerURI,
+                    agentID, 
+                    agentHomeURI == null ? "" : " @ " + agentHomeURI);
+
+                message = "Teleporting to the default region.";
                 return m_DefaultGatewayRegion;
+            }
 
             GridRegion region = m_GridService.GetRegionByUUID(m_ScopeID, regionID);
+
+            if (region == null)
+            {
+                m_log.DebugFormat(
+                    "[GATEKEEPER SERVICE]: Could not find region with ID {0} as requested by user {1}{2}.  Returning null.",
+                    regionID, agentID, (agentHomeURI == null) ? "" : " @ " + agentHomeURI);
+
+                message = "The teleport destination could not be found.";
+                return null;
+            }
+
+            m_log.DebugFormat(
+                "[GATEKEEPER SERVICE]: Returning region {0} {1} @ {2} to user {3}{4}.",
+                region.RegionName, 
+                region.RegionID,
+                region.ServerURI,
+                agentID, 
+                agentHomeURI == null ? "" : " @ " + agentHomeURI);
+
             return region;
         }
 
         #region Login Agent
-        public bool LoginAgent(AgentCircuitData aCircuit, GridRegion destination, out string reason)
+        public bool LoginAgent(GridRegion source, AgentCircuitData aCircuit, GridRegion destination, out string reason)
         {
             reason = string.Empty;
 
             string authURL = string.Empty;
             if (aCircuit.ServiceURLs.ContainsKey("HomeURI"))
                 authURL = aCircuit.ServiceURLs["HomeURI"].ToString();
-            m_log.InfoFormat("[GATEKEEPER SERVICE]: Login request for {0} {1} @ {2} ({3}) at {4} using viewer {5}, channel {6}, IP {7}, Mac {8}, Id0 {9} Teleport Flags {10}",
-                aCircuit.firstname, aCircuit.lastname, authURL, aCircuit.AgentID, destination.RegionName,
-                aCircuit.Viewer, aCircuit.Channel, aCircuit.IPAddress, aCircuit.Mac, aCircuit.Id0, aCircuit.teleportFlags.ToString());
+
+            m_log.InfoFormat("[GATEKEEPER SERVICE]: Login request for {0} {1} @ {2} ({3}) at {4} using viewer {5}, channel {6}, IP {7}, Mac {8}, Id0 {9}, Teleport Flags: {10}. From region {11}",
+                aCircuit.firstname, aCircuit.lastname, authURL, aCircuit.AgentID, destination.RegionID,
+                aCircuit.Viewer, aCircuit.Channel, aCircuit.IPAddress, aCircuit.Mac, aCircuit.Id0, (TeleportFlags)aCircuit.teleportFlags,
+                (source == null) ? "Unknown" : string.Format("{0} ({1}){2}", source.RegionName, source.RegionID, (source.RawServerURI == null) ? "" : " @ " + source.ServerURI));
+
+            string curViewer = Util.GetViewerName(aCircuit);
 
             //
             // Check client
@@ -234,11 +271,11 @@ namespace OpenSim.Services.HypergridService
             if (m_AllowedClients != string.Empty)
             {
                 Regex arx = new Regex(m_AllowedClients);
-                Match am = arx.Match(aCircuit.Viewer);
+                Match am = arx.Match(curViewer);
 
                 if (!am.Success)
                 {
-                    m_log.InfoFormat("[GATEKEEPER SERVICE]: Login failed, reason: client {0} is not allowed", aCircuit.Viewer);
+                    m_log.InfoFormat("[GATEKEEPER SERVICE]: Login failed, reason: client {0} is not allowed", curViewer);
                     return false;
                 }
             }
@@ -246,11 +283,11 @@ namespace OpenSim.Services.HypergridService
             if (m_DeniedClients != string.Empty)
             {
                 Regex drx = new Regex(m_DeniedClients);
-                Match dm = drx.Match(aCircuit.Viewer);
+                Match dm = drx.Match(curViewer);
 
                 if (dm.Success)
                 {
-                    m_log.InfoFormat("[GATEKEEPER SERVICE]: Login failed, reason: client {0} is denied", aCircuit.Viewer);
+                    m_log.InfoFormat("[GATEKEEPER SERVICE]: Login failed, reason: client {0} is denied", curViewer);
                     return false;
                 }
             }
@@ -396,7 +433,7 @@ namespace OpenSim.Services.HypergridService
                 try
                 {
                     Uri uri = new Uri(aCircuit.ServiceURLs["HomeURI"].ToString());
-                    aCircuit.lastname = "@" + uri.Host; // + ":" + uri.Port;
+                    aCircuit.lastname = "@" + uri.Authority;
                 }
                 catch
                 {
@@ -413,9 +450,16 @@ namespace OpenSim.Services.HypergridService
             // Preserve our TeleportFlags we have gathered so-far
             loginFlag |= (Constants.TeleportFlags) aCircuit.teleportFlags;
 
-            m_log.DebugFormat("[GATEKEEPER SERVICE]: Launching {0} {1}", aCircuit.Name, loginFlag);
+            m_log.DebugFormat("[GATEKEEPER SERVICE]: Launching {0}, Teleport Flags: {1}", aCircuit.Name, loginFlag);
 
-            return m_SimulationService.CreateAgent(destination, aCircuit, (uint)loginFlag, out reason);
+            string version;
+
+            if (!m_SimulationService.QueryAccess(
+                destination, aCircuit.AgentID, aCircuit.ServiceURLs["HomeURI"].ToString(), 
+                true, aCircuit.startpos, "SIMULATION/0.3", new List<UUID>(), out version, out reason))
+                return false;
+
+            return m_SimulationService.CreateAgent(source, destination, aCircuit, (uint)loginFlag, out reason);
         }
 
         protected bool Authenticate(AgentCircuitData aCircuit)

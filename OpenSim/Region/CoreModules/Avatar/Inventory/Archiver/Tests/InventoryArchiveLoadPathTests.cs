@@ -36,14 +36,12 @@ using OpenSim.Data;
 using OpenSim.Framework;
 using OpenSim.Framework.Serialization;
 using OpenSim.Framework.Serialization.External;
-using OpenSim.Framework.Communications;
 using OpenSim.Region.CoreModules.Avatar.Inventory.Archiver;
 using OpenSim.Region.CoreModules.World.Serialiser;
 using OpenSim.Region.Framework.Scenes;
 using OpenSim.Region.Framework.Scenes.Serialization;
 using OpenSim.Services.Interfaces;
 using OpenSim.Tests.Common;
-using OpenSim.Tests.Common.Mock;
 
 namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
 {
@@ -69,8 +67,8 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
 
             UserAccountHelpers.CreateUserWithInventory(scene, m_uaMT, "meowfood");
             UserAccountHelpers.CreateUserWithInventory(scene, m_uaLL1, "hampshire");
-            
-            archiverModule.DearchiveInventory(m_uaMT.FirstName, m_uaMT.LastName, "/", "meowfood", m_iarStream);            
+
+            archiverModule.DearchiveInventory(UUID.Random(), m_uaMT.FirstName, m_uaMT.LastName, "/", "meowfood", m_iarStream);            
             InventoryItemBase foundItem1
                 = InventoryArchiveUtils.FindItemByPath(scene.InventoryService, m_uaMT.PrincipalID, m_item1Name);
             
@@ -79,7 +77,7 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
             // Now try loading to a root child folder
             UserInventoryHelpers.CreateInventoryFolder(scene.InventoryService, m_uaMT.PrincipalID, "xA", false);
             MemoryStream archiveReadStream = new MemoryStream(m_iarStream.ToArray());
-            archiverModule.DearchiveInventory(m_uaMT.FirstName, m_uaMT.LastName, "xA", "meowfood", archiveReadStream);
+            archiverModule.DearchiveInventory(UUID.Random(), m_uaMT.FirstName, m_uaMT.LastName, "xA", "meowfood", archiveReadStream);
 
             InventoryItemBase foundItem2
                 = InventoryArchiveUtils.FindItemByPath(scene.InventoryService, m_uaMT.PrincipalID, "xA/" + m_item1Name);
@@ -88,7 +86,7 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
             // Now try loading to a more deeply nested folder
             UserInventoryHelpers.CreateInventoryFolder(scene.InventoryService, m_uaMT.PrincipalID, "xB/xC", false);
             archiveReadStream = new MemoryStream(archiveReadStream.ToArray());
-            archiverModule.DearchiveInventory(m_uaMT.FirstName, m_uaMT.LastName, "xB/xC", "meowfood", archiveReadStream);
+            archiverModule.DearchiveInventory(UUID.Random(), m_uaMT.FirstName, m_uaMT.LastName, "xB/xC", "meowfood", archiveReadStream);
 
             InventoryItemBase foundItem3
                 = InventoryArchiveUtils.FindItemByPath(scene.InventoryService, m_uaMT.PrincipalID, "xB/xC/" + m_item1Name);
@@ -110,7 +108,7 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
             SceneHelpers.SetupSceneModules(scene, serialiserModule, archiverModule);
             
             UserAccountHelpers.CreateUserWithInventory(scene, m_uaMT, "password");
-            archiverModule.DearchiveInventory(m_uaMT.FirstName, m_uaMT.LastName, "/Objects", "password", m_iarStream);
+            archiverModule.DearchiveInventory(UUID.Random(), m_uaMT.FirstName, m_uaMT.LastName, "/Objects", "password", m_iarStream);
 
             InventoryItemBase foundItem1
                 = InventoryArchiveUtils.FindItemByPath(
@@ -180,13 +178,13 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
 
             mre.Reset();
             archiverModule.ArchiveInventory(
-                Guid.NewGuid(), userFirstName, userLastName, "Objects", userPassword, archiveWriteStream);
+                UUID.Random(), userFirstName, userLastName, "Objects", userPassword, archiveWriteStream);
             mre.WaitOne(60000, false);
 
             // LOAD ITEM
             MemoryStream archiveReadStream = new MemoryStream(archiveWriteStream.ToArray());
-            
-            archiverModule.DearchiveInventory(userFirstName, userLastName, "Scripts", userPassword, archiveReadStream);
+
+            archiverModule.DearchiveInventory(UUID.Random(), userFirstName, userLastName, "Scripts", userPassword, archiveReadStream);
 
             InventoryItemBase foundItem1
                 = InventoryArchiveUtils.FindItemByPath(
@@ -229,7 +227,7 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
 
             {
                 // Test replication of path1
-                new InventoryArchiveReadRequest(scene.InventoryService, scene.AssetService, scene.UserAccountService, ua1, null, (Stream)null, false)
+                new InventoryArchiveReadRequest(UUID.Random(), null, scene.InventoryService, scene.AssetService, scene.UserAccountService, ua1, null, (Stream)null, false)
                     .ReplicateArchivePathToUserInventory(
                         iarPath1, scene.InventoryService.GetRootFolder(ua1.PrincipalID), 
                         foldersCreated, nodesLoaded);
@@ -246,7 +244,7 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
             
             {
                 // Test replication of path2
-                new InventoryArchiveReadRequest(scene.InventoryService, scene.AssetService, scene.UserAccountService, ua1, null, (Stream)null, false)
+                new InventoryArchiveReadRequest(UUID.Random(), null, scene.InventoryService, scene.AssetService, scene.UserAccountService, ua1, null, (Stream)null, false)
                     .ReplicateArchivePathToUserInventory(
                         iarPath2, scene.InventoryService.GetRootFolder(ua1.PrincipalID), 
                         foldersCreated, nodesLoaded);
@@ -292,7 +290,7 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
             
             string itemArchivePath = string.Join("", new string[] { folder1ArchiveName, folder2ArchiveName });
 
-            new InventoryArchiveReadRequest(scene.InventoryService, scene.AssetService, scene.UserAccountService, ua1, null, (Stream)null, false)
+            new InventoryArchiveReadRequest(UUID.Random(), null, scene.InventoryService, scene.AssetService, scene.UserAccountService, ua1, null, (Stream)null, false)
                 .ReplicateArchivePathToUserInventory(
                     itemArchivePath, scene.InventoryService.GetRootFolder(ua1.PrincipalID), 
                     new Dictionary<string, InventoryFolderBase>(), new HashSet<InventoryNodeBase>());
@@ -343,7 +341,7 @@ namespace OpenSim.Region.CoreModules.Avatar.Inventory.Archiver.Tests
             
             string itemArchivePath = string.Join("", new string[] { folder1ArchiveName, folder2ArchiveName });
 
-            new InventoryArchiveReadRequest(scene.InventoryService, scene.AssetService, scene.UserAccountService, ua1, folder1ExistingName, (Stream)null, true)
+            new InventoryArchiveReadRequest(UUID.Random(), null, scene.InventoryService, scene.AssetService, scene.UserAccountService, ua1, folder1ExistingName, (Stream)null, true)
                 .ReplicateArchivePathToUserInventory(
                     itemArchivePath, scene.InventoryService.GetRootFolder(ua1.PrincipalID), 
                     new Dictionary<string, InventoryFolderBase>(), new HashSet<InventoryNodeBase>());

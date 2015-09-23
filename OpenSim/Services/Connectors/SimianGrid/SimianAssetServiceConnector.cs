@@ -225,10 +225,30 @@ namespace OpenSim.Services.Connectors.SimianGrid
                 {
                     AssetBase asset = SimianGetOperation(id);
                     handler(id, sender, asset);
-                }
+                }, null, "SimianAssetServiceConnector.GetFromService"
             );
 
             return true;
+        }
+
+        public bool[] AssetsExist(string[] ids)
+        {
+            if (String.IsNullOrEmpty(m_serverUrl))
+            {
+                m_log.Error("[SIMIAN ASSET CONNECTOR]: No AssetServerURI configured");
+                throw new InvalidOperationException();
+            }
+
+            bool[] exist = new bool[ids.Length];
+
+            for (int i = 0; i < ids.Length; i++)
+            {
+                AssetMetadata metadata = GetMetadata(ids[i]);
+                if (metadata != null)
+                    exist[i] = true;
+            }
+
+            return exist;
         }
 
         /// <summary>

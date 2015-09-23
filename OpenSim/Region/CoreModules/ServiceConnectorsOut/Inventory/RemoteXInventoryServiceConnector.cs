@@ -172,21 +172,12 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Inventory
             return m_RemoteConnector.GetInventorySkeleton(userId);
         }
 
-        public  InventoryCollection GetUserInventory(UUID userID)
-        {
-            return m_RemoteConnector.GetUserInventory(userID);
-        }
-
-        public  void GetUserInventory(UUID userID, InventoryReceiptCallback callback)
-        {
-        }
-
         public InventoryFolderBase GetRootFolder(UUID userID)
         {
             return m_RemoteConnector.GetRootFolder(userID);
         }
 
-        public InventoryFolderBase GetFolderForType(UUID userID, AssetType type)
+        public InventoryFolderBase GetFolderForType(UUID userID, FolderType type)
         {
             return m_RemoteConnector.GetFolderForType(userID, type);
         }
@@ -211,6 +202,11 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Inventory
             //}
 
             return invCol;
+        }
+
+        public virtual InventoryCollection[] GetMultipleFoldersContent(UUID principalID, UUID[] folderIDs)
+        {
+            return m_RemoteConnector.GetMultipleFoldersContent(principalID, folderIDs);
         }
 
         public  List<InventoryItemBase> GetFolderItems(UUID userID, UUID folderID)
@@ -305,6 +301,14 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Inventory
             if (m_RemoteConnector == null)
                 m_log.DebugFormat("[XINVENTORY CONNECTOR]: connector stub is null!!!");
             return m_RemoteConnector.GetItem(item);
+        }
+
+        public InventoryItemBase[] GetMultipleItems(UUID userID, UUID[] itemIDs)
+        {
+            if (itemIDs == null)
+                return new InventoryItemBase[0];
+
+            return m_RemoteConnector.GetMultipleItems(userID, itemIDs);
         }
 
         public  InventoryFolderBase GetFolder(InventoryFolderBase folder)

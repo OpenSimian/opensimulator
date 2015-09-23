@@ -52,7 +52,7 @@ namespace OpenSim.Services.ProfilesService
         {
             if(string.IsNullOrEmpty(configName))
             {
-                m_log.WarnFormat("[PROFILES]: Configuration section not given!");
+                m_log.WarnFormat("[PROFILES SERVICE]: Configuration section not given!");
                 return;
             }
 
@@ -72,6 +72,7 @@ namespace OpenSim.Services.ProfilesService
             IConfig ProfilesConfig = config.Configs[configName];
             if (ProfilesConfig != null)
             {
+                dllName = ProfilesConfig.GetString("StorageProvider", dllName);
                 connString = ProfilesConfig.GetString("ConnectionString", connString);
                 realm = ProfilesConfig.GetString("Realm", realm);
             }

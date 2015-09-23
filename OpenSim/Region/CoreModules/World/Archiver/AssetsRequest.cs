@@ -33,6 +33,7 @@ using System.Timers;
 using log4net;
 using OpenMetaverse;
 using OpenSim.Framework;
+using OpenSim.Framework.Monitoring;
 using OpenSim.Framework.Serialization;
 using OpenSim.Framework.Serialization.External;
 using OpenSim.Services.Interfaces;
@@ -81,7 +82,7 @@ namespace OpenSim.Region.CoreModules.World.Archiver
         /// <value>
         /// uuids to request
         /// </value>
-        protected IDictionary<UUID, AssetType> m_uuids;
+        protected IDictionary<UUID, sbyte> m_uuids;
 
         /// <value>
         /// Callback used when all the assets requested have been received.
@@ -115,7 +116,7 @@ namespace OpenSim.Region.CoreModules.World.Archiver
         protected Dictionary<string, object> m_options;
 
         protected internal AssetsRequest(
-            AssetsArchiver assetsArchiver, IDictionary<UUID, AssetType> uuids, 
+            AssetsArchiver assetsArchiver, IDictionary<UUID, sbyte> uuids, 
             IAssetService assetService, IUserAccountService userService, 
             UUID scope, Dictionary<string, object> options, 
             AssetsRequestCallback assetsRequestCallback)
@@ -143,7 +144,7 @@ namespace OpenSim.Region.CoreModules.World.Archiver
             m_requestState = RequestState.Running;
             
             m_log.DebugFormat("[ARCHIVER]: AssetsRequest executed looking for {0} possible assets", m_repliesRequired);
-            
+
             // We can stop here if there are no assets to fetch
             if (m_repliesRequired == 0)
             {
@@ -154,7 +155,7 @@ namespace OpenSim.Region.CoreModules.World.Archiver
 
             m_requestCallbackTimer.Enabled = true;
 
-            foreach (KeyValuePair<UUID, AssetType> kvp in m_uuids)
+            foreach (KeyValuePair<UUID, sbyte> kvp in m_uuids)
             {
 //                m_log.DebugFormat("[ARCHIVER]: Requesting asset {0}", kvp.Key);
 
@@ -226,7 +227,7 @@ namespace OpenSim.Region.CoreModules.World.Archiver
             finally
             {
                 if (timedOut)
-                    Util.FireAndForget(PerformAssetsRequestCallback, true);
+                    WorkManager.RunInThread(PerformAssetsRequestCallback, true, "Archive Assets Request Callback");
             }
         }
 
@@ -235,9 +236,8 @@ namespace OpenSim.Region.CoreModules.World.Archiver
             // Check for broken asset types and fix them with the AssetType gleaned by UuidGatherer
             if (fetchedAsset != null && fetchedAsset.Type == (sbyte)AssetType.Unknown)
             {
-                AssetType type = (AssetType)assetType;
-                m_log.InfoFormat("[ARCHIVER]: Rewriting broken asset type for {0} to {1}", fetchedAsset.ID, type);
-                fetchedAsset.Type = (sbyte)type;
+                m_log.InfoFormat("[ARCHIVER]: Rewriting broken asset type for {0} to {1}", fetchedAsset.ID,  SLUtil.AssetTypeFromCode((sbyte)assetType));
+                fetchedAsset.Type = (sbyte)assetType;
             }
 
             AssetRequestCallback(fetchedAssetID, this, fetchedAsset);
@@ -296,7 +296,7 @@ namespace OpenSim.Region.CoreModules.World.Archiver
                         
                         // We want to stop using the asset cache thread asap 
                         // as we now need to do the work of producing the rest of the archive
-                        Util.FireAndForget(PerformAssetsRequestCallback, false);
+                        WorkManager.RunInThread(PerformAssetsRequestCallback, false, "Archive Assets Request Callback");
                     }
                     else
                     {
@@ -335,7 +335,7 @@ namespace OpenSim.Region.CoreModules.World.Archiver
             if (asset.Type == (sbyte)AssetType.Object && asset.Data != null && m_options.ContainsKey("home"))
             {
                 //m_log.DebugFormat("[ARCHIVER]: Rewriting object data for {0}", asset.ID);
-                string xml = ExternalRepresentationUtils.RewriteSOP(Utils.BytesToString(asset.Data), m_options["home"].ToString(), m_userAccountService, m_scopeID);
+                string xml = ExternalRepresentationUtils.RewriteSOP(Utils.BytesToString(asset.Data), string.Empty, m_options["home"].ToString(), m_userAccountService, m_scopeID);
                 asset.Data = Utils.StringToBytes(xml);
             }
             return asset;

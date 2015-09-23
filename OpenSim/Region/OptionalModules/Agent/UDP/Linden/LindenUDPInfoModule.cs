@@ -304,7 +304,7 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
         private string GetImageQueuesReport(string[] showParams)
         {
             if (showParams.Length < 5 || showParams.Length > 6)
-                return "Usage: image queues show <first-name> <last-name> [full]";
+                return "Usage: show image queues <first-name> <last-name> [full]";
 
             string firstName = showParams[3];
             string lastName = showParams[4];
@@ -395,7 +395,7 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
             report.Append(GetColumnEntry("Type", maxTypeLength, columnPadding));
             
             report.AppendFormat(
-                "{0,7} {1,7} {2,7} {3,7} {4,9} {5,7} {6,7} {7,7} {8,7} {9,7} {10,8} {11,7} {12,7}\n",
+                "{0,7} {1,7} {2,7} {3,7} {4,9} {5,7} {6,7} {7,7} {8,7} {9,7} {10,8} {11,7}\n",
                 "Since",
                 "Pkts",
                 "Pkts",
@@ -407,12 +407,11 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
                 "Q Pkts",
                 "Q Pkts",
                 "Q Pkts",
-                "Q Pkts",
                 "Q Pkts");
     
             report.AppendFormat("{0,-" + totalInfoFieldsLength +  "}", "");
             report.AppendFormat(
-                "{0,7} {1,7} {2,7} {3,7} {4,9} {5,7} {6,7} {7,7} {8,7} {9,7} {10,8} {11,7} {12,7}\n",
+                "{0,7} {1,7} {2,7} {3,7} {4,9} {5,7} {6,7} {7,7} {8,7} {9,7} {10,8} {11,7}\n",
                 "Last In",
                 "In",
                 "Out",
@@ -424,8 +423,7 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
                 "Cloud",
                 "Task",
                 "Texture",
-                "Asset",
-                "State");            
+                "Asset");            
             
             lock (m_scenes)
             {
@@ -434,24 +432,24 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
                     scene.ForEachClient(
                         delegate(IClientAPI client)
                         {
-                            bool isChild = client.SceneAgent.IsChildAgent;
-                            if (isChild && !showChildren)
-                                return;
-                    
-                            string name = client.Name;
-                            if (pname != "" && name != pname)
-                                return;
-
-                            string regionName = scene.RegionInfo.RegionName;
-
-                            report.Append(GetColumnEntry(name, maxNameLength, columnPadding));
-                            report.Append(GetColumnEntry(regionName, maxRegionNameLength, columnPadding));
-                            report.Append(GetColumnEntry(isChild ? "Cd" : "Rt", maxTypeLength, columnPadding));
-
                             if (client is IStatsCollector)
                             {
-                                IStatsCollector stats = (IStatsCollector)client;
+
+                                bool isChild = client.SceneAgent.IsChildAgent;
+                                if (isChild && !showChildren)
+                                    return;
                         
+                                string name = client.Name;
+                                if (pname != "" && name != pname)
+                                    return;
+
+                                string regionName = scene.RegionInfo.RegionName;
+
+                                report.Append(GetColumnEntry(name, maxNameLength, columnPadding));
+                                report.Append(GetColumnEntry(regionName, maxRegionNameLength, columnPadding));
+                                report.Append(GetColumnEntry(isChild ? "Cd" : "Rt", maxTypeLength, columnPadding));
+
+                                IStatsCollector stats = (IStatsCollector)client;                            
                                 report.AppendLine(stats.Report());
                             }
                         });
@@ -489,8 +487,10 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
             report.Append(GetColumnEntry("Type", maxTypeLength, columnPadding));            
             
             report.AppendFormat(
-                "{0,7} {1,8} {2,7} {3,7} {4,7} {5,7} {6,9} {7,7}\n",
-                "Total",
+                "{0,8} {1,8} {2,7} {3,8} {4,7} {5,7} {6,7} {7,7} {8,9} {9,7}\n",
+                "Max",
+                "Target", 
+                "Actual",
                 "Resend",
                 "Land",
                 "Wind",
@@ -501,7 +501,9 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
     
             report.AppendFormat("{0,-" + totalInfoFieldsLength +  "}", "");
             report.AppendFormat(
-                "{0,7} {1,8} {2,7} {3,7} {4,7} {5,7} {6,9} {7,7}",
+                "{0,8} {1,8} {2,7} {3,8} {4,7} {5,7} {6,7} {7,7} {8,9} {9,7}\n",
+                "kb/s",
+                "kb/s",
                 "kb/s",
                 "kb/s",
                 "kb/s",
@@ -513,8 +515,6 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
             
             report.AppendLine();
             
-            bool firstClient = true;
-            
             lock (m_scenes)
             {
                 foreach (Scene scene in m_scenes.Values)
@@ -525,12 +525,6 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
                             if (client is LLClientView)
                             {
                                 LLClientView llClient = client as LLClientView;
-
-                                if (firstClient)
-                                {
-                                    report.AppendLine(GetServerThrottlesReport(llClient.UDPServer));
-                                    firstClient = false;
-                                }
 
                                 bool isChild = client.SceneAgent.IsChildAgent;
                                 if (isChild && !showChildren)
@@ -550,7 +544,11 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
                                 report.Append(GetColumnEntry(isChild ? "Cd" : "Rt", maxTypeLength, columnPadding));                                                             
                             
                                 report.AppendFormat(
-                                    "{0,7} {1,8} {2,7} {3,7} {4,7} {5,7} {6,9} {7,7}",
+                                    "{0,8} {1,8} {2,7} {3,8} {4,7} {5,7} {6,7} {7,7} {8,9} {9,7}\n",
+                                    ci.maxThrottle > 0 ? ((ci.maxThrottle * 8) / 1000).ToString() : "-",
+                                    llUdpClient.FlowThrottle.AdaptiveEnabled 
+                                        ? ((ci.targetThrottle * 8) / 1000).ToString() 
+                                        : (llUdpClient.FlowThrottle.TotalDripRequest * 8 / 1000).ToString(),
                                     (ci.totalThrottle * 8) / 1000,
                                     (ci.resendThrottle * 8) / 1000,
                                     (ci.landThrottle * 8) / 1000,
@@ -558,9 +556,7 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
                                     (ci.cloudThrottle * 8) / 1000,
                                     (ci.taskThrottle * 8) / 1000,
                                     (ci.textureThrottle  * 8) / 1000,
-                                    (ci.assetThrottle  * 8) / 1000);                                                                                      
-                        
-                                report.AppendLine();
+                                    (ci.assetThrottle  * 8) / 1000);
                             }
                         });
                 }
@@ -568,36 +564,6 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
 
             return report.ToString();
         }         
-                
-        protected string GetServerThrottlesReport(LLUDPServer udpServer)
-        {
-            StringBuilder report = new StringBuilder();
-            
-            int columnPadding = 2;
-            int maxNameLength = 18;                                    
-            int maxRegionNameLength = 14;
-            int maxTypeLength = 4;
-            
-            string name = "SERVER AGENT RATES";
-                                
-            report.Append(GetColumnEntry(name, maxNameLength, columnPadding));
-            report.Append(GetColumnEntry("-", maxRegionNameLength, columnPadding));
-            report.Append(GetColumnEntry("-", maxTypeLength, columnPadding));             
-            
-            ThrottleRates throttleRates = udpServer.ThrottleRates;
-            report.AppendFormat(
-                "{0,7} {1,8} {2,7} {3,7} {4,7} {5,7} {6,9} {7,7}",
-                (throttleRates.Total * 8) / 1000,
-                (throttleRates.Resend * 8) / 1000,
-                (throttleRates.Land * 8) / 1000,
-                (throttleRates.Wind * 8) / 1000,
-                (throttleRates.Cloud * 8) / 1000,
-                (throttleRates.Task * 8) / 1000,
-                (throttleRates.Texture  * 8) / 1000,
-                (throttleRates.Asset  * 8) / 1000);  
-
-            return report.ToString();
-        }
 
         /// <summary>
         /// Show client stats data
@@ -639,7 +605,9 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
                                          string.Format(
                                             "{0} ({1:0.00}%)", 
                                             llClient.TotalAgentUpdates, 
-                                            (float)cinfo.SyncRequests["AgentUpdate"] / llClient.TotalAgentUpdates * 100));
+                                            cinfo.SyncRequests.ContainsKey("AgentUpdate") 
+                                                ? (float)cinfo.SyncRequests["AgentUpdate"] / llClient.TotalAgentUpdates * 100 
+                                                : 0));
                             }
                         });
                 }
@@ -671,7 +639,7 @@ namespace OpenSim.Region.OptionalModules.UDP.Linden
                                     aCircuit = new AgentCircuitData();
 
                                 if (!llClient.SceneAgent.IsChildAgent)
-                                    m_log.InfoFormat("[INFO]: {0} # {1} # {2}", llClient.Name, aCircuit.Viewer, aCircuit.Id0);
+                                    m_log.InfoFormat("[INFO]: {0} # {1} # {2}", llClient.Name, Util.GetViewerName(aCircuit), aCircuit.Id0);
 
                                 int avg_reqs = cinfo.AsyncRequests.Values.Sum() + cinfo.GenericRequests.Values.Sum() + cinfo.SyncRequests.Values.Sum();
                                 avg_reqs = avg_reqs / ((DateTime.Now - cinfo.StartedTime).Minutes + 1);

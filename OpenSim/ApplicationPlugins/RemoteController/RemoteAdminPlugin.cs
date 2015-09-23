@@ -39,9 +39,9 @@ using log4net;
 using Nini.Config;
 using Nwc.XmlRpc;
 using OpenMetaverse;
+using Mono.Addins;
 using OpenSim;
 using OpenSim.Framework;
-using OpenSim.Framework.Communications;
 using OpenSim.Framework.Console;
 using OpenSim.Framework.Servers;
 using OpenSim.Framework.Servers.HttpServer;
@@ -56,6 +56,7 @@ using RegionInfo = OpenSim.Framework.RegionInfo;
 
 namespace OpenSim.ApplicationPlugins.RemoteController
 {
+    [Extension(Path = "/OpenSim/Startup", Id = "LoadRegions", NodeName = "Plugin")]
     public class RemoteAdminPlugin : IApplicationPlugin
     {
         private static readonly ILog m_log = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
@@ -161,6 +162,9 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                     availableMethods["admin_acl_remove"] = (req, ep) => InvokeXmlRpcMethod(req, ep, XmlRpcAccessListRemove);
                     availableMethods["admin_acl_list"] = (req, ep) => InvokeXmlRpcMethod(req, ep, XmlRpcAccessListList);
                     availableMethods["admin_estate_reload"] = (req, ep) => InvokeXmlRpcMethod(req, ep, XmlRpcEstateReload);
+
+                    // Land management
+                    availableMethods["admin_reset_land"] = (req, ep) => InvokeXmlRpcMethod(req, ep, XmlRpcResetLand);
 
                     // Either enable full remote functionality or just selected features
                     string enabledMethods = m_config.GetString("enabled_methods", "all");
@@ -694,7 +698,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                     region.EstateSettings.EstateName = (string) requestData["estate_name"];
                     region.EstateSettings.EstateOwner = userID;
                     // Persistence does not seem to effect the need to save a new estate
-                    region.EstateSettings.Save();
+                    m_application.EstateDataService.StoreEstateSettings(region.EstateSettings);
 
                     if (!m_application.EstateDataService.LinkRegion(region.RegionID, (int) region.EstateSettings.EstateID))
                         throw new Exception("Failed to join estate.");
@@ -724,7 +728,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                 // If an access specification was provided, use it.
                 // Otherwise accept the default.
                 newScene.RegionInfo.EstateSettings.PublicAccess = GetBoolean(requestData, "public", m_publicAccess);
-                newScene.RegionInfo.EstateSettings.Save();
+                m_application.EstateDataService.StoreEstateSettings(newScene.RegionInfo.EstateSettings);
 
                 // enable voice on newly created region if
                 // requested by either the XmlRpc request or the
@@ -910,7 +914,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                 scene.RegionInfo.EstateSettings.PublicAccess =
                     GetBoolean(requestData,"public", scene.RegionInfo.EstateSettings.PublicAccess);
                 if (scene.RegionInfo.Persistent)
-                    scene.RegionInfo.EstateSettings.Save();
+                    m_application.EstateDataService.StoreEstateSettings(scene.RegionInfo.EstateSettings);
 
                 if (requestData.ContainsKey("enable_voice"))
                 {
@@ -1022,7 +1026,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                     // Set home position
 
                     GridRegion home = scene.GridService.GetRegionByPosition(scopeID, 
-                        (int)(regionXLocation * Constants.RegionSize), (int)(regionYLocation * Constants.RegionSize));
+                                        (int)Util.RegionToWorldLoc(regionXLocation), (int)Util.RegionToWorldLoc(regionYLocation));
                     if (null == home)
                     {
                         m_log.WarnFormat("[RADMIN]: Unable to set home region for newly created user account {0} {1}", firstName, lastName);
@@ -1252,7 +1256,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                     if ((null != regionXLocation) && (null != regionYLocation))
                     {
                         GridRegion home = scene.GridService.GetRegionByPosition(scopeID, 
-                            (int)(regionXLocation * Constants.RegionSize), (int)(regionYLocation * Constants.RegionSize));
+                                        (int)Util.RegionToWorldLoc((uint)regionXLocation), (int)Util.RegionToWorldLoc((uint)regionYLocation));
                         if (null == home) {
                             m_log.WarnFormat("[RADMIN]: Unable to set home region for updated user account {0} {1}", firstName, lastName);
                         } else {
@@ -1484,8 +1488,11 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                     }
 
                     IRegionArchiverModule archiver = scene.RequestModuleInterface<IRegionArchiverModule>();
+                    Dictionary<string, object> archiveOptions = new Dictionary<string,object>();
+                    if (mergeOar) archiveOptions.Add("merge", null);
+                    if (skipAssets) archiveOptions.Add("skipAssets", null);
                     if (archiver != null)
-                        archiver.DearchiveRegion(filename, mergeOar, skipAssets, Guid.Empty);
+                        archiver.DearchiveRegion(filename, Guid.Empty, archiveOptions);
                     else
                         throw new Exception("Archiver module not present for scene");
 
@@ -1789,7 +1796,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
             scene.RegionInfo.EstateSettings.EstateAccess = new UUID[]{};
 
             if (scene.RegionInfo.Persistent)
-                scene.RegionInfo.EstateSettings.Save();
+                m_application.EstateDataService.StoreEstateSettings(scene.RegionInfo.EstateSettings);
 
             m_log.Info("[RADMIN]: Access List Clear Request complete");
         }
@@ -1835,7 +1842,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                 }
                 scene.RegionInfo.EstateSettings.EstateAccess = accessControlList.ToArray();
                 if (scene.RegionInfo.Persistent)
-                    scene.RegionInfo.EstateSettings.Save();
+                    m_application.EstateDataService.StoreEstateSettings(scene.RegionInfo.EstateSettings);
             }
 
             responseData["added"] = addedUsers;
@@ -1884,7 +1891,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                 }
                 scene.RegionInfo.EstateSettings.EstateAccess = accessControlList.ToArray();
                 if (scene.RegionInfo.Persistent)
-                    scene.RegionInfo.EstateSettings.Save();
+                    m_application.EstateDataService.StoreEstateSettings(scene.RegionInfo.EstateSettings);
             }
 
             responseData["removed"] = removedUsers;
@@ -2059,6 +2066,56 @@ namespace OpenSim.ApplicationPlugins.RemoteController
             // We have no way of telling the failure of the actual teleport
             responseData["success"] = true;
         }
+
+        private void XmlRpcResetLand(XmlRpcRequest request, XmlRpcResponse response, IPEndPoint remoteClient)
+        {
+            Hashtable requestData = (Hashtable)request.Params[0];
+            Hashtable responseData = (Hashtable)response.Value;
+
+            string musicURL = string.Empty;
+            UUID groupID = UUID.Zero;
+            uint flags = 0;
+            bool set_group = false, set_music = false, set_flags = false;
+
+            if (requestData.Contains("group") && requestData["group"] != null)
+                set_group = UUID.TryParse(requestData["group"].ToString(), out groupID);
+            if (requestData.Contains("music") && requestData["music"] != null)
+            {
+                musicURL = requestData["music"].ToString();
+                set_music = true;
+            }
+            if (requestData.Contains("flags") && requestData["flags"] != null)
+                set_flags = UInt32.TryParse(requestData["flags"].ToString(), out flags);
+
+            m_log.InfoFormat("[RADMIN]: Received Reset Land Request group={0} musicURL={1} flags={2}", 
+                (set_group ? groupID.ToString() : "unchanged"), 
+                (set_music ? musicURL : "unchanged"), 
+                (set_flags ? flags.ToString() : "unchanged"));
+
+            m_application.SceneManager.ForEachScene(delegate(Scene s)
+            {
+                List<ILandObject> parcels = s.LandChannel.AllParcels();
+                foreach (ILandObject p in parcels)
+                {
+                    if (set_music)
+                        p.LandData.MusicURL = musicURL;
+
+                    if (set_group)
+                        p.LandData.GroupID = groupID;
+
+                    if (set_flags)
+                        p.LandData.Flags = flags;
+
+                    s.LandChannel.UpdateLandObject(p.LandData.LocalID, p.LandData);
+                }
+            }
+            );
+
+            responseData["success"] = true;
+
+            m_log.Info("[RADMIN]: Reset Land Request complete");
+        }
+
 
         /// <summary>
         /// Parse a float with the given parameter name from a request data hash table.
@@ -2235,7 +2292,6 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                 {
                     account.ServiceURLs = new Dictionary<string, object>();
                     account.ServiceURLs["HomeURI"] = string.Empty;
-                    account.ServiceURLs["GatekeeperURI"] = string.Empty;
                     account.ServiceURLs["InventoryServerURI"] = string.Empty;
                     account.ServiceURLs["AssetServerURI"] = string.Empty;
                 }
@@ -2482,8 +2538,8 @@ namespace OpenSim.ApplicationPlugins.RemoteController
             try
             {
                 Dictionary<UUID,UUID> inventoryMap = new Dictionary<UUID,UUID>();
-                CopyInventoryFolders(destination, source, AssetType.Clothing, inventoryMap, avatarAppearance);
-                CopyInventoryFolders(destination, source, AssetType.Bodypart, inventoryMap, avatarAppearance);
+                CopyInventoryFolders(destination, source, FolderType.Clothing, inventoryMap, avatarAppearance);
+                CopyInventoryFolders(destination, source, FolderType.BodyPart, inventoryMap, avatarAppearance);
 
                 AvatarWearable[] wearables = avatarAppearance.Wearables;
 
@@ -2519,20 +2575,20 @@ namespace OpenSim.ApplicationPlugins.RemoteController
             IInventoryService inventoryService = m_application.SceneManager.CurrentOrFirstScene.InventoryService;
 
             // Get Clothing folder of receiver
-            InventoryFolderBase destinationFolder = inventoryService.GetFolderForType(destination, AssetType.Clothing);
+            InventoryFolderBase destinationFolder = inventoryService.GetFolderForType(destination, FolderType.Clothing);
 
             if (destinationFolder == null)
                 throw new Exception("Cannot locate folder(s)");
 
             // Missing destination folder? This should *never* be the case
-            if (destinationFolder.Type != (short)AssetType.Clothing)
+            if (destinationFolder.Type != (short)FolderType.Clothing)
             {
                 destinationFolder = new InventoryFolderBase();
                 
                 destinationFolder.ID       = UUID.Random();
                 destinationFolder.Name     = "Clothing";
                 destinationFolder.Owner    = destination;
-                destinationFolder.Type     = (short)AssetType.Clothing;
+                destinationFolder.Type = (short)FolderType.Clothing;
                 destinationFolder.ParentID = inventoryService.GetRootFolder(destination).ID;
                 destinationFolder.Version  = 1;
                 inventoryService.AddFolder(destinationFolder);     // store base record
@@ -2650,7 +2706,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
         /// This method is called by establishAppearance to copy inventory folders to make
         /// copies of Clothing and Bodyparts inventory folders and attaches worn attachments
         /// </summary>
-        private void CopyInventoryFolders(UUID destination, UUID source, AssetType assetType, Dictionary<UUID,UUID> inventoryMap,
+        private void CopyInventoryFolders(UUID destination, UUID source, FolderType assetType, Dictionary<UUID, UUID> inventoryMap,
                                           AvatarAppearance avatarAppearance)
         {
             IInventoryService inventoryService = m_application.SceneManager.CurrentOrFirstScene.InventoryService;
@@ -2666,9 +2722,12 @@ namespace OpenSim.ApplicationPlugins.RemoteController
             {
                 sourceFolder = new InventoryFolderBase();
                 sourceFolder.ID       = UUID.Random();
-                if (assetType == AssetType.Clothing) {
+                if (assetType == FolderType.Clothing) 
+                {
                     sourceFolder.Name     = "Clothing";
-                } else {
+                } 
+                else 
+                {
                     sourceFolder.Name     = "Body Parts";
                 }
                 sourceFolder.Owner    = source;
@@ -2684,7 +2743,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
             {
                 destinationFolder = new InventoryFolderBase();
                 destinationFolder.ID       = UUID.Random();
-                if (assetType == AssetType.Clothing)
+                if (assetType == FolderType.Clothing)
                 {
                     destinationFolder.Name  = "Clothing";
                 }
@@ -2763,15 +2822,13 @@ namespace OpenSim.ApplicationPlugins.RemoteController
         /// </summary>
         private void ApplyNextOwnerPermissions(InventoryItemBase item)
         {
-            if (item.InvType == (int)InventoryType.Object && (item.CurrentPermissions & 7) != 0)
+            if (item.InvType == (int)InventoryType.Object)
             {
-                if ((item.CurrentPermissions & ((uint)PermissionMask.Copy >> 13)) == 0)
-                    item.CurrentPermissions &= ~(uint)PermissionMask.Copy;
-                if ((item.CurrentPermissions & ((uint)PermissionMask.Transfer >> 13)) == 0)
-                    item.CurrentPermissions &= ~(uint)PermissionMask.Transfer;
-                if ((item.CurrentPermissions & ((uint)PermissionMask.Modify >> 13)) == 0)
-                    item.CurrentPermissions &= ~(uint)PermissionMask.Modify;
+                uint perms = item.CurrentPermissions;
+                PermissionsUtil.ApplyFoldedPermissions(item.CurrentPermissions, ref perms);
+                item.CurrentPermissions = perms;
             }
+
             item.CurrentPermissions &= item.NextPermissions;
             item.BasePermissions &= item.NextPermissions;
             item.EveryOnePermissions &= item.NextPermissions;
@@ -2883,7 +2940,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                             // Set home position
 
                             GridRegion home = scene.GridService.GetRegionByPosition(scopeID, 
-                                (int)(regionXLocation * Constants.RegionSize), (int)(regionYLocation * Constants.RegionSize));
+                                        (int)Util.RegionToWorldLoc(regionXLocation), (int)Util.RegionToWorldLoc(regionYLocation));
                             if (null == home) {
                                 m_log.WarnFormat("[RADMIN]: Unable to set home region for newly created user account {0} {1}", names[0], names[1]);
                             } else {
@@ -2925,16 +2982,16 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                                 // m_log.DebugFormat("[RADMIN] {0} folders, {1} items in inventory",
                                 //   uic.folders.Count, uic.items.Count);
 
-                                InventoryFolderBase clothingFolder = inventoryService.GetFolderForType(ID, AssetType.Clothing);
+                                InventoryFolderBase clothingFolder = inventoryService.GetFolderForType(ID, FolderType.Clothing);
 
                                 // This should *never* be the case
-                                if (clothingFolder == null || clothingFolder.Type != (short)AssetType.Clothing)
+                                if (clothingFolder == null || clothingFolder.Type != (short)FolderType.Clothing)
                                 {
                                     clothingFolder = new InventoryFolderBase();
                                     clothingFolder.ID       = UUID.Random();
                                     clothingFolder.Name     = "Clothing";
                                     clothingFolder.Owner    = ID;
-                                    clothingFolder.Type     = (short)AssetType.Clothing;
+                                    clothingFolder.Type     = (short)FolderType.Clothing;
                                     clothingFolder.ParentID = inventoryService.GetRootFolder(ID).ID;
                                     clothingFolder.Version  = 1;
                                     inventoryService.AddFolder(clothingFolder);     // store base record
@@ -2980,7 +3037,7 @@ namespace OpenSim.ApplicationPlugins.RemoteController
                                         extraFolder.ID       = UUID.Random();
                                         extraFolder.Name     = outfitName;
                                         extraFolder.Owner    = ID;
-                                        extraFolder.Type     = (short)AssetType.Clothing;
+                                        extraFolder.Type     = (short)FolderType.Clothing;
                                         extraFolder.Version  = 1;
                                         extraFolder.ParentID = clothingFolder.ID;
                                         inventoryService.AddFolder(extraFolder);

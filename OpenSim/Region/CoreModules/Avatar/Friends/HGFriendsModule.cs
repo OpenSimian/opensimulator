@@ -239,6 +239,8 @@ namespace OpenSim.Region.CoreModules.Avatar.Friends
                     fList.Add(s.Substring(0, 36));
             }
 
+            // FIXME: also query the presence status of friends in other grids (like in HGStatusNotifier.Notify())
+
             PresenceInfo[] presence = PresenceService.GetAgents(fList.ToArray());
             foreach (PresenceInfo pi in presence)
             {
@@ -658,7 +660,8 @@ namespace OpenSim.Region.CoreModules.Avatar.Friends
                     FriendsService.Delete(friendUUI, agentID.ToString());
 
                     // notify the exfriend's service
-                    Util.FireAndForget(delegate { Delete(exfriendID, agentID, friendUUI); });
+                    Util.FireAndForget(
+                        delegate { Delete(exfriendID, agentID, friendUUI); }, null, "HGFriendsModule.DeleteFriendshipForeignFriend");
 
                     m_log.DebugFormat("[HGFRIENDS MODULE]: {0} terminated {1}", agentID, friendUUI);
                     return true;
@@ -676,7 +679,8 @@ namespace OpenSim.Region.CoreModules.Avatar.Friends
                     FriendsService.Delete(agentUUI, exfriendID.ToString());
 
                     // notify the agent's service?
-                    Util.FireAndForget(delegate { Delete(agentID, exfriendID, agentUUI); });
+                    Util.FireAndForget(
+                        delegate { Delete(agentID, exfriendID, agentUUI); }, null, "HGFriendsModule.DeleteFriendshipLocalFriend");
 
                     m_log.DebugFormat("[HGFRIENDS MODULE]: {0} terminated {1}", agentUUI, exfriendID);
                     return true;

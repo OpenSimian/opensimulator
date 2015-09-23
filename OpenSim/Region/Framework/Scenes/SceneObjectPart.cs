@@ -42,7 +42,7 @@ using OpenSim.Framework;
 using OpenSim.Region.Framework.Interfaces;
 using OpenSim.Region.Framework.Scenes.Scripting;
 using OpenSim.Region.Framework.Scenes.Serialization;
-using OpenSim.Region.Physics.Manager;
+using OpenSim.Region.PhysicsModules.SharedBase;
 using PermissionMask = OpenSim.Framework.PermissionMask;
 
 namespace OpenSim.Region.Framework.Scenes
@@ -186,7 +186,7 @@ namespace OpenSim.Region.Framework.Scenes
         
         public bool RETURN_AT_EDGE;
         
-        public bool BlockGrab;
+        public bool BlockGrab { get; set; }
 
         public bool StatusSandbox;
 
@@ -266,7 +266,7 @@ namespace OpenSim.Region.Framework.Scenes
 
         public Quaternion SpinOldOrientation = Quaternion.Identity;
 
-        protected int m_APIDIterations = 0;
+        protected bool m_APIDActive = false;
         protected Quaternion m_APIDTarget = Quaternion.Identity;
         protected float m_APIDDamp = 0;
         protected float m_APIDStrength = 0;
@@ -642,6 +642,12 @@ namespace OpenSim.Region.Framework.Scenes
             }
         }
 
+        protected bool APIDActive
+        {
+            get { return m_APIDActive; }
+            set { m_APIDActive = value; }
+        }
+
         protected Quaternion APIDTarget
         {
             get { return m_APIDTarget; }
@@ -923,14 +929,17 @@ namespace OpenSim.Region.Framework.Scenes
 
             set
             {
-                m_velocity = value;
+                if (Util.IsNanOrInfinity(value))
+                    m_velocity = Vector3.Zero;
+                else
+                    m_velocity = value;
 
                 PhysicsActor actor = PhysActor;
                 if (actor != null)
                 {
                     if (actor.IsPhysical)
                     {
-                        actor.Velocity = value;
+                        actor.Velocity = m_velocity;
                         ParentGroup.Scene.PhysicsScene.AddPhysicsActorTaint(actor);
                     }
                 }
@@ -957,14 +966,30 @@ namespace OpenSim.Region.Framework.Scenes
                 }
                 return m_angularVelocity;
             }
-            set { m_angularVelocity = value; }
+            set
+            {
+                if (Util.IsNanOrInfinity(value))
+                    m_angularVelocity = Vector3.Zero;
+                else
+                    m_angularVelocity = value;
+
+                PhysicsActor actor = PhysActor;
+                if ((actor != null) && actor.IsPhysical)
+                    actor.RotationalVelocity = m_angularVelocity;
+            }
         }
 
         /// <summary></summary>
         public Vector3 Acceleration
         {
             get { return m_acceleration; }
-            set { m_acceleration = value; }
+            set 
+            {
+                if (Util.IsNanOrInfinity(value))
+                    m_acceleration = Vector3.Zero;
+                else
+                    m_acceleration = value;
+            }
         }
 
         public string Description { get; set; }
@@ -1299,7 +1324,7 @@ namespace OpenSim.Region.Framework.Scenes
         /// <value>
         /// null if there are no sitting avatars.  This is to save us create a hashset for every prim in a scene.
         /// </value>
-        private HashSet<UUID> m_sittingAvatars;
+        private HashSet<ScenePresence> m_sittingAvatars;
 
         public virtual UUID RegionID
         {
@@ -1589,20 +1614,29 @@ namespace OpenSim.Region.Framework.Scenes
 
         public void AddTextureAnimation(Primitive.TextureAnimation pTexAnim)
         {
-            byte[] data = new byte[16];
-            int pos = 0;
+            byte[] data;
 
-            // The flags don't like conversion from uint to byte, so we have to do
-            // it the crappy way.  See the above function :(
+            if (pTexAnim.Flags == Primitive.TextureAnimMode.ANIM_OFF)
+            {
+                data = Utils.EmptyBytes;
+            }
+            else
+            {
+                data = new byte[16];
+                int pos = 0;
 
-            data[pos] = ConvertScriptUintToByte((uint)pTexAnim.Flags); pos++;
-            data[pos] = (byte)pTexAnim.Face; pos++;
-            data[pos] = (byte)pTexAnim.SizeX; pos++;
-            data[pos] = (byte)pTexAnim.SizeY; pos++;
+                // The flags don't like conversion from uint to byte, so we have to do
+                // it the crappy way.  See the above function :(
 
-            Utils.FloatToBytes(pTexAnim.Start).CopyTo(data, pos);
-            Utils.FloatToBytes(pTexAnim.Length).CopyTo(data, pos + 4);
-            Utils.FloatToBytes(pTexAnim.Rate).CopyTo(data, pos + 8);
+                data[pos] = ConvertScriptUintToByte((uint)pTexAnim.Flags); pos++;
+                data[pos] = (byte)pTexAnim.Face; pos++;
+                data[pos] = (byte)pTexAnim.SizeX; pos++;
+                data[pos] = (byte)pTexAnim.SizeY; pos++;
+
+                Utils.FloatToBytes(pTexAnim.Start).CopyTo(data, pos);
+                Utils.FloatToBytes(pTexAnim.Length).CopyTo(data, pos + 4);
+                Utils.FloatToBytes(pTexAnim.Rate).CopyTo(data, pos + 8);
+            }
 
             m_TextureAnimation = data;
         }
@@ -1753,7 +1787,11 @@ namespace OpenSim.Region.Framework.Scenes
         /// <returns></returns>
         public SceneObjectPart Copy(uint localID, UUID AgentID, UUID GroupID, int linkNum, bool userExposed)
         {
+            // FIXME: This is dangerous since it's easy to forget to reset some references when necessary and end up 
+            // with bugs that only occur in some circumstances (e.g. crossing between regions on the same simulator
+            // but not between regions on different simulators).  Really, all copying should be done explicitly.
             SceneObjectPart dupe = (SceneObjectPart)MemberwiseClone();
+
             dupe.m_shape = m_shape.Copy();
             dupe.m_regionHandle = m_regionHandle;
             if (userExposed)
@@ -1798,6 +1836,8 @@ namespace OpenSim.Region.Framework.Scenes
             byte[] extraP = new byte[Shape.ExtraParams.Length];
             Array.Copy(Shape.ExtraParams, extraP, extraP.Length);
             dupe.Shape.ExtraParams = extraP;
+
+            dupe.m_sittingAvatars = new HashSet<ScenePresence>();
 
             // safeguard  actual copy is done in sog.copy
             dupe.KeyframeMotion = null;
@@ -2038,7 +2078,7 @@ namespace OpenSim.Region.Framework.Scenes
         /// </summary>
         /// <param name="xmlReader"></param>
         /// <returns></returns>
-        public static SceneObjectPart FromXml(XmlTextReader xmlReader)
+        public static SceneObjectPart FromXml(XmlReader xmlReader)
         {
             SceneObjectPart part = SceneObjectSerializer.Xml2ToSOP(xmlReader);
 
@@ -2071,22 +2111,6 @@ namespace OpenSim.Region.Framework.Scenes
                 return;
 
             ParentGroup.RootPart.RETURN_AT_EDGE = p;
-        }
-
-        public bool GetBlockGrab()
-        {
-            if (ParentGroup.IsDeleted)
-                return false;
-
-            return ParentGroup.RootPart.BlockGrab;
-        }
-
-        public void SetBlockGrab(bool p)
-        {
-            if (ParentGroup.IsDeleted)
-                return;
-
-            ParentGroup.RootPart.BlockGrab = p;
         }
 
         public void SetStatusSandbox(bool p)
@@ -2230,7 +2254,7 @@ namespace OpenSim.Region.Framework.Scenes
         {
             if (tau > 0)
             {
-                ParentGroup.moveToTarget(target, tau);
+                ParentGroup.MoveToTarget(target, tau);
             }
             else
             {
@@ -2368,7 +2392,7 @@ namespace OpenSim.Region.Framework.Scenes
                     CollidingMessage = CreateColliderArgs(this, colliders);
 
                     if (CollidingMessage.Colliders.Count > 0)
-                        notify(LocalId, CollidingMessage);
+                        DoNotify(notify, LocalId, CollidingMessage);
 
                     if (PassCollisions)
                         sendToRoot = true;
@@ -2382,7 +2406,7 @@ namespace OpenSim.Region.Framework.Scenes
                 {
                     CollidingMessage = CreateColliderArgs(ParentGroup.RootPart, colliders);
                     if (CollidingMessage.Colliders.Count > 0)
-                        notify(ParentGroup.RootPart.LocalId, CollidingMessage);
+                        DoNotify(notify, ParentGroup.RootPart.LocalId, CollidingMessage);
                 }
             }
         }
@@ -2397,7 +2421,33 @@ namespace OpenSim.Region.Framework.Scenes
                 colliding.Add(CreateDetObjectForGround());
                 LandCollidingMessage.Colliders = colliding;
 
-                notify(LocalId, LandCollidingMessage);
+                DoNotify(notify, LocalId, LandCollidingMessage);
+            }
+        }
+
+        private void DoNotify(ScriptCollidingNotification notify, uint id, ColliderArgs collargs)
+        {
+            if (m_parentGroup != null && ParentGroup.Scene != null && ParentGroup.Scene.ShouldUseFireAndForgetForCollisions)
+            {
+                // For those learning C#, FireAndForget takes a function, an object to pass
+                //    to that function and an ID string. The "oo => {}" construct is a lambda expression
+                //    for a function with one arguement ('oo'). The 'new Object[] {}" construct creates an Object
+                //    that is an object array and initializes it with three items (the parameters
+                //    being passed). The parameters passed are the function to call ('notify') and
+                //    its two arguements. Finally, once in the function (called later by the FireAndForget
+                //    thread scheduler), the passed object is cast to an object array and then each
+                //    of its items (aoo[0] to aoo[2]) are individually cast to what they are and
+                //    then used in a call of the passed ScriptCollidingNotification function.
+                Util.FireAndForget(oo =>
+                {
+                    Object[] aoo = (Object[])oo;
+                    ((ScriptCollidingNotification)aoo[0])((uint)aoo[1], (ColliderArgs)aoo[2]);
+
+                }, new Object[] { notify, id, collargs }, "SOP.Collision");
+            }
+            else
+            {
+                notify(id, collargs);
             }
         }
 
@@ -2479,13 +2529,10 @@ namespace OpenSim.Region.Framework.Scenes
 
             if (pa != null)
             {
-                Vector3 newpos = new Vector3(pa.Position.GetBytes(), 0);
-                
-                if (ParentGroup.Scene.TestBorderCross(newpos, Cardinals.N)
-                    | ParentGroup.Scene.TestBorderCross(newpos, Cardinals.S)
-                    | ParentGroup.Scene.TestBorderCross(newpos, Cardinals.E)
-                    | ParentGroup.Scene.TestBorderCross(newpos, Cardinals.W))
+                Vector3 newpos = pa.Position;
+                if (!ParentGroup.Scene.PositionIsInCurrentRegion(newpos))
                 {
+                    // Setting position outside current region will start region crossing
                     ParentGroup.AbsolutePosition = newpos;
                     return;
                 }
@@ -2614,7 +2661,7 @@ namespace OpenSim.Region.Framework.Scenes
                     return;
                 }
                 
-                m_APIDIterations = 1 + (int)(Math.PI * APIDStrength);
+                APIDActive = true;
             }
 
             // Necessary to get the lookat deltas applied
@@ -2628,7 +2675,7 @@ namespace OpenSim.Region.Framework.Scenes
 
         public void StopLookAt()
         {
-            APIDTarget = Quaternion.Identity;
+            APIDActive = false;
         }
 
 
@@ -3283,10 +3330,7 @@ namespace OpenSim.Region.Framework.Scenes
 
         public void StopMoveToTarget()
         {
-            ParentGroup.stopMoveToTarget();
-
-            ParentGroup.ScheduleGroupForTerseUpdate();
-            //ParentGroup.ScheduleGroupForFullUpdate();
+            ParentGroup.StopMoveToTarget();
         }
 
         public void StoreUndoState()
@@ -4224,6 +4268,8 @@ namespace OpenSim.Region.Framework.Scenes
                     if (pa != null)
                     {
                         pa.SetMaterial(Material);
+                        pa.Position = GetWorldPosition();
+                        pa.Orientation = GetWorldRotation();
                         DoPhysicsPropertyUpdate(UsePhysics, true);
 
                         SubscribeForCollisionEvents();
@@ -4800,6 +4846,67 @@ namespace OpenSim.Region.Framework.Scenes
         {
             ParentGroup.AddScriptLPS(count);
         }
+
+        /// <summary>
+        /// Sets a prim's owner and permissions when it's rezzed.
+        /// </summary>
+        /// <param name="item">The inventory item from which the item was rezzed</param>
+        /// <param name="userInventory">True: the item is being rezzed from the user's inventory. False: from a prim's inventory.</param>
+        /// <param name="scene">The scene the prim is being rezzed into</param>
+        public void ApplyPermissionsOnRez(InventoryItemBase item, bool userInventory, Scene scene)
+        {
+            if ((OwnerID != item.Owner) || ((item.CurrentPermissions & SceneObjectGroup.SLAM) != 0) || ((item.Flags & (uint)InventoryItemFlags.ObjectSlamPerm) != 0))
+            {
+                if (scene.Permissions.PropagatePermissions())
+                {
+                    if ((item.Flags & (uint)InventoryItemFlags.ObjectHasMultipleItems) == 0)
+                    {
+                        // Apply the item's permissions to the object
+                        //LogPermissions("Before applying item permissions");
+                        if (userInventory)
+                        {
+                            EveryoneMask = item.EveryOnePermissions;
+                            NextOwnerMask = item.NextPermissions;
+                        }
+                        else
+                        {
+                            if ((item.Flags & (uint)InventoryItemFlags.ObjectOverwriteEveryone) != 0)
+                                EveryoneMask = item.EveryOnePermissions;
+                            if ((item.Flags & (uint)InventoryItemFlags.ObjectOverwriteNextOwner) != 0)
+                                NextOwnerMask = item.NextPermissions;
+                            if ((item.Flags & (uint)InventoryItemFlags.ObjectOverwriteGroup) != 0)
+                                GroupMask = item.GroupPermissions;
+                        }
+                        //LogPermissions("After applying item permissions");
+                    }
+                }
+
+                GroupMask = 0; // DO NOT propagate here
+            }
+
+            if (OwnerID != item.Owner)
+            {
+                //LogPermissions("Before ApplyNextOwnerPermissions");
+
+                if (scene.Permissions.PropagatePermissions())
+                    ApplyNextOwnerPermissions();
+
+                //LogPermissions("After ApplyNextOwnerPermissions");
+
+                LastOwnerID = OwnerID;
+                OwnerID = item.Owner;
+                Inventory.ChangeInventoryOwner(item.Owner);
+            }
+        }
+
+        /// <summary>
+        /// Logs the prim's permissions. Useful when debugging permission problems.
+        /// </summary>
+        /// <param name="message"></param>
+        private void LogPermissions(String message)
+        {
+            PermissionsUtil.LogPermissions(Name, message, BaseMask, OwnerMask, NextOwnerMask);
+        }
         
         public void ApplyNextOwnerPermissions()
         {
@@ -4817,20 +4924,34 @@ namespace OpenSim.Region.Framework.Scenes
         {
             try
             {
-                if (APIDTarget != Quaternion.Identity)
+                if (APIDActive)
                 {
-                    if (m_APIDIterations <= 1)
+                    PhysicsActor pa = ParentGroup.RootPart.PhysActor;
+                    if (pa == null || !pa.IsPhysical || APIDStrength < 0.04)
                     {
-                        UpdateRotation(APIDTarget);
-                        APIDTarget = Quaternion.Identity;
+                        StopLookAt();
                         return;
                     }
 
-                    Quaternion rot = Quaternion.Slerp(RotationOffset,APIDTarget,1.0f/(float)m_APIDIterations);
-                    rot.Normalize();
-                    UpdateRotation(rot);
+                    Quaternion currRot = GetWorldRotation();
+                    currRot.Normalize();
 
-                    m_APIDIterations--;
+                    // difference between current orientation and desired orientation
+                    Quaternion dR = currRot / APIDTarget;
+
+                    // find axis and angle of rotation to rotate to desired orientation
+                    Vector3 axis = Vector3.UnitX;
+                    float angle;
+                    dR.GetAxisAngle(out axis, out angle);
+                    axis = axis * currRot;
+
+                    // clamp strength to avoid overshoot
+                    float strength = 1.0f / APIDStrength;
+                    if (strength > 1.0) strength = 1.0f;
+
+                    // set angular velocity to rotate to desired orientation
+                    // with velocity proportional to strength and angle
+                    AngularVelocity = axis * angle * strength * (float)Math.PI;
 
                     // This ensures that we'll check this object on the next iteration
                     ParentGroup.QueueForUpdateCheck();
@@ -4856,19 +4977,19 @@ namespace OpenSim.Region.Framework.Scenes
         /// true if the avatar was not already recorded, false otherwise.
         /// </returns>
         /// <param name='avatarId'></param>
-        protected internal bool AddSittingAvatar(UUID avatarId)
+        protected internal bool AddSittingAvatar(ScenePresence sp)
         {
             lock (ParentGroup.m_sittingAvatars)
             {
                 if (IsSitTargetSet && SitTargetAvatar == UUID.Zero)
-                    SitTargetAvatar = avatarId;
+                    SitTargetAvatar = sp.UUID;
 
                 if (m_sittingAvatars == null)
-                    m_sittingAvatars = new HashSet<UUID>();
+                    m_sittingAvatars = new HashSet<ScenePresence>();
 
-                if (m_sittingAvatars.Add(avatarId))
+                if (m_sittingAvatars.Add(sp))
                 {
-                    ParentGroup.m_sittingAvatars.Add(avatarId);
+                    ParentGroup.m_sittingAvatars.Add(sp);
 
                     return true;
                 }
@@ -4885,22 +5006,22 @@ namespace OpenSim.Region.Framework.Scenes
         /// true if the avatar was present and removed, false if it was not present.
         /// </returns>
         /// <param name='avatarId'></param>
-        protected internal bool RemoveSittingAvatar(UUID avatarId)
+        protected internal bool RemoveSittingAvatar(ScenePresence sp)
         {
             lock (ParentGroup.m_sittingAvatars)
             {
-                if (SitTargetAvatar == avatarId)
+                if (SitTargetAvatar == sp.UUID)
                     SitTargetAvatar = UUID.Zero;
 
                 if (m_sittingAvatars == null)
                     return false;
 
-                if (m_sittingAvatars.Remove(avatarId))
+                if (m_sittingAvatars.Remove(sp))
                 {
                     if (m_sittingAvatars.Count == 0)
                         m_sittingAvatars = null;
 
-                    ParentGroup.m_sittingAvatars.Remove(avatarId);
+                    ParentGroup.m_sittingAvatars.Remove(sp);
 
                     return true;
                 }
@@ -4914,14 +5035,14 @@ namespace OpenSim.Region.Framework.Scenes
         /// </summary>
         /// <remarks>This applies to all sitting avatars whether there is a sit target set or not.</remarks>
         /// <returns>A hashset of the sitting avatars.  Returns null if there are no sitting avatars.</returns>
-        public HashSet<UUID> GetSittingAvatars()
+        public HashSet<ScenePresence> GetSittingAvatars()
         {
             lock (ParentGroup.m_sittingAvatars)
             {
                 if (m_sittingAvatars == null)
                     return null;
                 else
-                    return new HashSet<UUID>(m_sittingAvatars);
+                    return new HashSet<ScenePresence>(m_sittingAvatars);
             }
         }
 

@@ -15,24 +15,36 @@
 ; * You MUST change this! It will NOT be done for you!
 ; *
 
-RegionUUID = "11111111-2222-3333-4444-555555555555"
+RegionUUID = 11111111-2222-3333-4444-555555555555
 
-Location = "1000,1000"
-InternalAddress = "127.0.0.1"
+Location = 1000,1000
+InternalAddress = 0.0.0.0
 InternalPort = 9000
 AllowAlternatePorts = False
-ExternalHostName = "SYSTEMIP"
+ExternalHostName = SYSTEMIP
+
+; *
+; * Variable-sized regions allows the creation of large, borderless spaces.
+; * The default is 256 meters. For larger spaces, set these to multiples of 256.
+; * For the time being, X and Y need to be the same.
+; *
+; SizeX = 512
+; SizeY = 512
 
 ; *
 ; * Prim data
 ; * This allows limiting the sizes of prims and the region prim count
 ; *
 
-; NonphysicalPrimMax = 256
-; PhysicalPrimMax = 10
+; NonPhysicalPrimMax = 256
+; PhysicalPrimMax = 64
 ; ClampPrimSize = False
 ; MaxPrims = 15000
 ; MaxAgents = 100
+
+; * Max prims per user (per parcel).
+; * Negative values will disable the check.
+; MaxPrimsPerUser = -1
 
 ; *
 ; * Multi-Tenancy. Only set if needed
@@ -46,7 +58,41 @@ ExternalHostName = "SYSTEMIP"
 
 ; RegionType = "Mainland"
 
+; * Region Specific Static Maptiles:
+; * Important: To use any kind of texture *assets* as a static maptile, the following
+; * things must be set in the [Map] section of OpenSim.ini :
 ; *
-; * UUID of texture to use as a maptile for this region.
-; * Only set if you have disabled dynamic generation of the map tile from the region contents.
-; MaptileStaticUUID = "00000000-0000-0000-0000-000000000000"
+; *  MapImageModule = "MapImageModule"
+; *  GenerateMaptiles = false
+; *
+; * Now, there is a setting in [Map] in OpenSim.ini called
+; *
+; *  MaptileStaticUUID = 00000000-0000-0000-0000-000000000000
+; *
+; * where, given the criteria above, lets you specify the UUID of a texture asset to use
+; * as a maptile *Simulator Wide*. Here, you can override that on a per region basis for
+; * Simulators that run multiple regions:
+
+; MaptileStaticUUID = 00000000-0000-0000-0000-000000000000
+
+
+; * Region Specific Static Maptiles from file:
+; * It is also possible to create maptiles using external image files of the right size
+; * and supported formats (bmp,png,jpg in RGB 24bpp format)
+; *
+; * Important: To use any kind of texture *files* as a static maptile, the following
+; * things must be set in the [Map] section of OpenSim.ini :
+; *
+; *  MapImageModule = "MapImageModule"
+; *  GenerateMaptiles = true
+; *
+; * The image must be the same size in pixels as the region or varregion is in meters.
+; * i.e. 256x256 pixels for single region of 256x256m, or 1280x1280 pixels for a varregion
+; * of size 1280x1280m. The image can be loaded from anywhere by setting the path 
+; *                                ie: MaptileStaticFile = "maptiles/SomeFile.png"
+; *
+; * If this setting is used, then the base map is generated from this file instead of being
+; * built using MapImageModule's terrain and prim renderer. Parcel 'for sale' overlays are
+; * still drawn on top of the static map by the World Map module.
+
+; MaptileStaticFile = "SomeFile.png"

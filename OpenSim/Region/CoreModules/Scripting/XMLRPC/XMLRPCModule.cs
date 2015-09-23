@@ -36,6 +36,7 @@ using Nini.Config;
 using Nwc.XmlRpc;
 using OpenMetaverse;
 using OpenSim.Framework;
+using OpenSim.Framework.Monitoring;
 using OpenSim.Framework.Servers;
 using OpenSim.Framework.Servers.HttpServer;
 using OpenSim.Region.Framework.Interfaces;
@@ -656,12 +657,8 @@ namespace OpenSim.Region.CoreModules.Scripting.XMLRPC
 
         public void Process()
         {
-            httpThread = new Thread(SendRequest);
-            httpThread.Name = "HttpRequestThread";
-            httpThread.Priority = ThreadPriority.BelowNormal;
-            httpThread.IsBackground = true;
             _finished = false;
-            httpThread.Start();
+            httpThread = WorkManager.StartThread(SendRequest, "HttpRequestThread", ThreadPriority.BelowNormal, true, false);
         }
 
         /*
@@ -733,13 +730,19 @@ namespace OpenSim.Region.CoreModules.Scripting.XMLRPC
             }
 
             _finished = true;
+
+            Watchdog.RemoveThread();
         }
 
         public void Stop()
         {
             try
             {
-                httpThread.Abort();
+                if (httpThread != null)
+                {
+                    Watchdog.AbortThread(httpThread.ManagedThreadId);
+                    httpThread = null;
+                }
             }
             catch (Exception)
             {

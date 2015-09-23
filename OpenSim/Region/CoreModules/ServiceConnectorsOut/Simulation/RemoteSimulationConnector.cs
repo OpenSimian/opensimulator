@@ -27,6 +27,7 @@
 
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Reflection;
@@ -37,7 +38,6 @@ using Nini.Config;
 using OpenMetaverse;
 using OpenMetaverse.StructuredData;
 using OpenSim.Framework;
-using OpenSim.Framework.Communications;
 using OpenSim.Region.Framework.Interfaces;
 using OpenSim.Region.Framework.Scenes;
 using OpenSim.Region.Framework.Scenes.Serialization;
@@ -60,7 +60,6 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Simulation
         protected SimulationServiceConnector m_remoteConnector;
 
         protected bool m_safemode;
-        protected IPAddress m_thisIP;
 
         #region Region Module interface
 
@@ -141,12 +140,11 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Simulation
         {            
             m_aScene = scene;
             //m_regionClient = new RegionToRegionClient(m_aScene, m_hyperlinkService);
-            m_thisIP = Util.GetHostFromDNS(scene.RegionInfo.ExternalHostName);
         }
 
         #endregion
 
-        #region IInterregionComms
+        #region ISimulationService
 
         public IScene GetScene(UUID regionId)
         {
@@ -162,7 +160,7 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Simulation
          * Agent-related communications
          */
 
-        public bool CreateAgent(GridRegion destination, AgentCircuitData aCircuit, uint teleportFlags, out string reason)
+        public bool CreateAgent(GridRegion source, GridRegion destination, AgentCircuitData aCircuit, uint teleportFlags, out string reason)
         {
             if (destination == null)
             {
@@ -172,13 +170,13 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Simulation
             }
 
             // Try local first
-            if (m_localBackend.CreateAgent(destination, aCircuit, teleportFlags, out reason))
+            if (m_localBackend.CreateAgent(source, destination, aCircuit, teleportFlags, out reason))
                 return true;
 
             // else do the remote thing
             if (!m_localBackend.IsLocalRegion(destination.RegionID))
             {
-                return m_remoteConnector.CreateAgent(destination, aCircuit, teleportFlags, out reason);
+                return m_remoteConnector.CreateAgent(source, destination, aCircuit, teleportFlags, out reason);
             }
             return false;
         }
@@ -207,7 +205,7 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Simulation
             return m_remoteConnector.UpdateAgent(destination, cAgentData);
         }
 
-        public bool QueryAccess(GridRegion destination, UUID id, Vector3 position, out string version, out string reason)
+        public bool QueryAccess(GridRegion destination, UUID agentID, string agentHomeURI, bool viaTeleport, Vector3 position, string sversion, List<UUID> features, out string version, out string reason)
         {
             reason = "Communications failure";
             version = "Unknown";
@@ -216,12 +214,12 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Simulation
                 return false;
 
             // Try local first
-            if (m_localBackend.QueryAccess(destination, id, position, out version, out reason))
+            if (m_localBackend.QueryAccess(destination, agentID, agentHomeURI, viaTeleport, position, sversion, features, out version, out reason))
                 return true;
 
             // else do the remote thing
             if (!m_localBackend.IsLocalRegion(destination.RegionID))
-                return m_remoteConnector.QueryAccess(destination, id, position, out version, out reason);
+                return m_remoteConnector.QueryAccess(destination, agentID, agentHomeURI, viaTeleport, position, sversion, features, out version, out reason);
 
             return false;
         }
@@ -279,6 +277,6 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Simulation
             return false;
         }
 
-        #endregion /* IInterregionComms */
+        #endregion
     }
 }

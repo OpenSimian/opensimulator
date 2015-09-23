@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) Contributors, http://opensimulator.org/
  * See CONTRIBUTORS.TXT for a full list of copyright holders.
  *
@@ -158,7 +158,7 @@ namespace OpenSim.Groups
             }
             catch (Exception e)
             {
-                m_log.DebugFormat("[Groups.RobustHGConnector]: Exception {0}", e.StackTrace);
+                m_log.Error(string.Format("[Groups.RobustHGConnector]: Exception {0} ", e.Message), e);
             }
 
             return FailureResult();
@@ -209,11 +209,13 @@ namespace OpenSim.Groups
                 string agentID = request["AgentID"].ToString();
                 string token = request["AccessToken"].ToString();
 
-                m_GroupsService.RemoveAgentFromGroup(agentID, agentID, groupID, token);
+                if (!m_GroupsService.RemoveAgentFromGroup(agentID, agentID, groupID, token))
+                    NullResult(result, "Internal error");
+                else
+                    result["RESULT"] = "true";
             }
 
             //m_log.DebugFormat("[XXX]: resp string: {0}", xmlString);
-            result["RESULT"] = "true";
             return Util.UTF8NoBomEncoding.GetBytes(ServerUtils.BuildXmlResponse(result));
         }
 

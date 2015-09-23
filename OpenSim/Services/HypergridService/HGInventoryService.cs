@@ -103,12 +103,6 @@ namespace OpenSim.Services.HypergridService
             return new List<InventoryFolderBase>();
         }
 
-        public override InventoryCollection GetUserInventory(UUID userID)
-        {
-            // NOGO for this inventory service
-            return null;
-        }
-
         public override InventoryFolderBase GetRootFolder(UUID principalID)
         {
             //m_log.DebugFormat("[HG INVENTORY SERVICE]: GetRootFolder for {0}", principalID);
@@ -121,7 +115,7 @@ namespace OpenSim.Services.HypergridService
                 return ConvertToOpenSim(folders[0]);
             
             // make one
-            XInventoryFolder suitcase = CreateFolder(principalID, UUID.Zero, (int)AssetType.Folder, "My Suitcase");
+            XInventoryFolder suitcase = CreateFolder(principalID, UUID.Zero, (int)FolderType.Suitcase, "My Suitcase");
             return ConvertToOpenSim(suitcase);
         }
 
@@ -147,7 +141,7 @@ namespace OpenSim.Services.HypergridService
         //}
 
 
-        public override InventoryFolderBase GetFolderForType(UUID principalID, AssetType type)
+        public override InventoryFolderBase GetFolderForType(UUID principalID, FolderType type)
         {
             //m_log.DebugFormat("[HG INVENTORY SERVICE]: GetFolderForType for {0} {0}", principalID, type);
             return GetRootFolder(principalID);
@@ -159,7 +153,14 @@ namespace OpenSim.Services.HypergridService
         //public InventoryCollection GetFolderContent(UUID principalID, UUID folderID)
         //{
         //}
-     
+
+        // NOGO
+        //
+        public override InventoryCollection[] GetMultipleFoldersContent(UUID principalID, UUID[] folderID)
+        {
+            return new InventoryCollection[0];
+        }
+        
         //public List<InventoryItemBase> GetFolderItems(UUID principalID, UUID folderID)
         //{
         //}

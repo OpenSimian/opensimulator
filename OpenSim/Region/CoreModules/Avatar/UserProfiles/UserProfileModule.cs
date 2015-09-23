@@ -46,8 +46,12 @@ using OpenSim.Region.Framework.Scenes;
 using OpenSim.Services.Interfaces;
 using Mono.Addins;
 using OpenSim.Services.Connectors.Hypergrid;
+using OpenSim.Framework.Servers.HttpServer;
+using OpenSim.Services.UserProfilesService;
+using GridRegion = OpenSim.Services.Interfaces.GridRegion;
+using Microsoft.CSharp;
 
-namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
+namespace OpenSim.Region.CoreModules.Avatar.UserProfiles
 {
     [Extension(Path = "/OpenSim/RegionModules", NodeName = "RegionModule", Id = "UserProfilesModule")]
     public class UserProfileModule : IProfileModule, INonSharedRegionModule
@@ -63,6 +67,8 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
         Dictionary<UUID, UUID> m_classifiedCache = new Dictionary<UUID, UUID>();
         Dictionary<UUID, int> m_classifiedInterest = new Dictionary<UUID, int>();
 
+        private JsonRpcRequestManager rpc = new JsonRpcRequestManager();
+
         public Scene Scene
         {
             get; private set;
@@ -74,7 +80,8 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
         /// <value>
         /// The configuration
         /// </value>
-        public IConfigSource Config {
+        public IConfigSource Config 
+        {
             get;
             set;
         }
@@ -85,7 +92,8 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
         /// <value>
         /// The profile server URI.
         /// </value>
-        public string ProfileServerUri {
+        public string ProfileServerUri 
+        {
             get;
             set;
         }
@@ -107,10 +115,17 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
         /// <value>
         /// <c>true</c> if enabled; otherwise, <c>false</c>.
         /// </value>
-        public bool Enabled {
+        public bool Enabled 
+        {
             get;
             set;
         }
+
+        public string MyGatekeeper 
+        {
+            get; private set;
+        }
+
 
         #region IRegionModuleBase implementation
         /// <summary>
@@ -147,6 +162,9 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             m_log.Debug("[PROFILES]: Full Profiles Enabled");
             ReplaceableInterface = null;
             Enabled = true;
+
+            MyGatekeeper = Util.GetConfigVarFromSections<string>(source, "GatekeeperURI",
+                new string[] { "Startup", "Hypergrid", "UserProfiles" }, String.Empty);
         }
 
         /// <summary>
@@ -176,7 +194,7 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             Util.FireAndForget(delegate
             {
                 GetImageAssets(((IScenePresence)obj).UUID);
-            });
+            }, null, "UserProfileModule.GetImageAssets");
         }
 
         /// <summary>
@@ -319,7 +337,7 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             UUID.TryParse(args[0], out creatorId);
             parameters.Add("creatorId", OSD.FromUUID(creatorId));
             OSD Params = (OSD)parameters;
-            if(!JsonRpcRequest(ref Params, "avatarclassifiedsrequest", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Params, "avatarclassifiedsrequest", serverURI, UUID.Random().ToString()))
             {
                 remoteClient.SendAvatarClassifiedReply(new UUID(args[0]), classifieds);
                 return;
@@ -379,7 +397,7 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             GetUserProfileServerURI(target, out serverURI);
 
             object Ad = (object)ad;
-            if(!JsonRpcRequest(ref Ad, "classifieds_info_query", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Ad, "classifieds_info_query", serverURI, UUID.Random().ToString()))
             {
                 remoteClient.SendAgentAlertMessage(
                         "Error getting classified info", false);
@@ -439,9 +457,21 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
                                          uint queryParentEstate, UUID querySnapshotID, Vector3 queryGlobalPos, byte queryclassifiedFlags,
                                          int queryclassifiedPrice, IClientAPI remoteClient)
         {
+            Scene s = (Scene)remoteClient.Scene;
+            IMoneyModule money = s.RequestModuleInterface<IMoneyModule>();
+
+            if (money != null)
+            {
+                if (!money.AmountCovered(remoteClient.AgentId, queryclassifiedPrice))
+                {
+                    remoteClient.SendAgentAlertMessage("You do not have enough money to create requested classified.", false);
+                    return;
+                }
+                money.ApplyCharge(remoteClient.AgentId, queryclassifiedPrice, MoneyTransactionType.ClassifiedCharge);
+            }
+
             UserClassifiedAdd ad = new UserClassifiedAdd();
 
-            Scene s = (Scene) remoteClient.Scene;
             Vector3 pos = remoteClient.SceneAgent.AbsolutePosition;
             ILandObject land = s.LandChannel.GetLandObject(pos.X, pos.Y);
             ScenePresence p = FindPresence(remoteClient.AgentId);
@@ -475,10 +505,11 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
 
             OSD.SerializeMembers(Ad);
 
-            if(!JsonRpcRequest(ref Ad, "classified_update", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Ad, "classified_update", serverURI, UUID.Random().ToString()))
             {
                 remoteClient.SendAgentAlertMessage(
                         "Error updating classified", false);
+                return;
             }
         }
 
@@ -501,10 +532,11 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             UUID.TryParse(queryClassifiedID.ToString(), out classifiedId);
             parameters.Add("classifiedId", OSD.FromUUID(classifiedId));
             OSD Params = (OSD)parameters;
-            if(!JsonRpcRequest(ref Params, "classified_delete", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Params, "classified_delete", serverURI, UUID.Random().ToString()))
             {
                 remoteClient.SendAgentAlertMessage(
                         "Error classified delete", false);
+                return;
             }
 
             parameters = (OSDMap)Params;
@@ -551,7 +583,7 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             OSDMap parameters= new OSDMap();
             parameters.Add("creatorId", OSD.FromUUID(targetId));
             OSD Params = (OSD)parameters;
-            if(!JsonRpcRequest(ref Params, "avatarpicksrequest", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Params, "avatarpicksrequest", serverURI, UUID.Random().ToString()))
             {
                 remoteClient.SendAvatarPicksReply(new UUID(args[0]), picks);
                 return;
@@ -592,37 +624,66 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
                 return;
 
             UUID targetID;
-            UUID.TryParse(args[0], out targetID);
+            UUID.TryParse (args [0], out targetID);
             string serverURI = string.Empty;
-            GetUserProfileServerURI(targetID, out serverURI);
+            GetUserProfileServerURI (targetID, out serverURI);
+
+            string theirGatekeeperURI;
+            GetUserGatekeeperURI (targetID, out theirGatekeeperURI);
+
             IClientAPI remoteClient = (IClientAPI)sender;
 
-            UserProfilePick pick = new UserProfilePick();
-            UUID.TryParse(args[0], out pick.CreatorId);
-            UUID.TryParse(args[1], out pick.PickId);
+            UserProfilePick pick = new UserProfilePick ();
+            UUID.TryParse (args [0], out pick.CreatorId);
+            UUID.TryParse (args [1], out pick.PickId);
 
                 
             object Pick = (object)pick;
-            if(!JsonRpcRequest(ref Pick, "pickinforequest", serverURI, UUID.Random().ToString()))
-            {
-                remoteClient.SendAgentAlertMessage(
+            if (!rpc.JsonRpcRequest (ref Pick, "pickinforequest", serverURI, UUID.Random ().ToString ())) {
+                remoteClient.SendAgentAlertMessage (
                         "Error selecting pick", false);
-            }
-            pick = (UserProfilePick) Pick;
-            if(pick.SnapshotId == UUID.Zero)
-            {
-                // In case of a new UserPick, the data may not be ready and we would send wrong data, skip it...
-                m_log.DebugFormat("[PROFILES]: PickInfoRequest: SnapshotID is {0}", UUID.Zero.ToString());
                 return;
             }
-             
-            Vector3 globalPos;
-            Vector3.TryParse(pick.GlobalPos,out globalPos);
+            pick = (UserProfilePick)Pick;
+            
+            Vector3 globalPos = new Vector3(Vector3.Zero);
+            
+            // Smoke and mirrors
+            if (pick.Gatekeeper == MyGatekeeper) 
+            {
+                Vector3.TryParse(pick.GlobalPos,out globalPos);
+            } 
+            else 
+            {
+                // Setup the illusion
+                string region = string.Format("{0} {1}",pick.Gatekeeper,pick.SimName);
+                GridRegion target = Scene.GridService.GetRegionByName(Scene.RegionInfo.ScopeID, region);
+
+                if(target == null)
+                {
+                    // This is a dead or unreachable region
+                }
+                else
+                {
+                    // Work our slight of hand
+                    int x = target.RegionLocX;
+                    int y = target.RegionLocY;
+
+                    dynamic synthX = globalPos.X - (globalPos.X/Constants.RegionSize) * Constants.RegionSize;
+                    synthX += x;
+                    globalPos.X = synthX;
+
+                    dynamic synthY = globalPos.Y - (globalPos.Y/Constants.RegionSize) * Constants.RegionSize;
+                    synthY += y;
+                    globalPos.Y = synthY;
+                }
+            }
 
             m_log.DebugFormat("[PROFILES]: PickInfoRequest: {0} : {1}", pick.Name.ToString(), pick.SnapshotId.ToString());
 
+            // Pull the rabbit out of the hat
             remoteClient.SendPickInfoReply(pick.PickId,pick.CreatorId,pick.TopPick,pick.ParcelId,pick.Name,
-                                           pick.Desc,pick.SnapshotId,pick.User,pick.OriginalName,pick.SimName,
+                                           pick.Desc,pick.SnapshotId,pick.ParcelName,pick.OriginalName,pick.SimName,
                                            globalPos,pick.SortOrder,pick.Enabled);
         }
 
@@ -657,9 +718,10 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
         /// Enabled.
         /// </param>
         public void PickInfoUpdate(IClientAPI remoteClient, UUID pickID, UUID creatorID, bool topPick, string name, string desc, UUID snapshotID, int sortOrder, bool enabled)
-        {
-            
+        {        
+            //TODO: See how this works with NPC, May need to test
             m_log.DebugFormat("[PROFILES]: Start PickInfoUpdate Name: {0} PickId: {1} SnapshotId: {2}", name, pickID.ToString(), snapshotID.ToString());
+
             UserProfilePick pick = new UserProfilePick();
             string serverURI = string.Empty;
             GetUserProfileServerURI(remoteClient.AgentId, out serverURI);
@@ -667,44 +729,49 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
 
             Vector3 avaPos = p.AbsolutePosition;
             // Getting the global position for the Avatar
-            Vector3 posGlobal = new Vector3(remoteClient.Scene.RegionInfo.RegionLocX*Constants.RegionSize + avaPos.X,
-                                            remoteClient.Scene.RegionInfo.RegionLocY*Constants.RegionSize + avaPos.Y,
+            Vector3 posGlobal = new Vector3(remoteClient.Scene.RegionInfo.WorldLocX + avaPos.X,
+                                            remoteClient.Scene.RegionInfo.WorldLocY + avaPos.Y,
                                             avaPos.Z);
 
-            string landOwnerName = string.Empty;
-            ILandObject land =  p.Scene.LandChannel.GetLandObject(avaPos.X, avaPos.Y);
-            if(land.LandData.IsGroupOwned)
+            string  landParcelName  = "My Parcel";
+            UUID    landParcelID    = p.currentParcelUUID;
+
+            ILandObject land = p.Scene.LandChannel.GetLandObject(avaPos.X, avaPos.Y);
+
+            if (land != null)
             {
-                IGroupsModule groupMod = p.Scene.RequestModuleInterface<IGroupsModule>();
-                UUID groupId = land.LandData.GroupID;
-                GroupRecord groupRecord = groupMod.GetGroupRecord(groupId);
-                landOwnerName = groupRecord.GroupName;
+                // If land found, use parcel uuid from here because the value from SP will be blank if the avatar hasnt moved
+                landParcelName  = land.LandData.Name;
+                landParcelID    = land.LandData.GlobalID;
             }
             else
             {
-                IUserAccountService accounts = p.Scene.RequestModuleInterface<IUserAccountService>();
-                UserAccount user = accounts.GetUserAccount(p.Scene.RegionInfo.ScopeID, land.LandData.OwnerID);
-                landOwnerName = user.Name;
+                m_log.WarnFormat(
+                    "[PROFILES]: PickInfoUpdate found no parcel info at {0},{1} in {2}", 
+                    avaPos.X, avaPos.Y, p.Scene.Name);
             }
+
 
             pick.PickId = pickID;
             pick.CreatorId = creatorID;
             pick.TopPick = topPick;
             pick.Name = name;
             pick.Desc = desc;
-            pick.ParcelId = p.currentParcelUUID;
+            pick.ParcelId = landParcelID;
             pick.SnapshotId = snapshotID;
-            pick.User = landOwnerName;
+            pick.ParcelName = landParcelName;
             pick.SimName = remoteClient.Scene.RegionInfo.RegionName;
+            pick.Gatekeeper = MyGatekeeper;
             pick.GlobalPos = posGlobal.ToString();
             pick.SortOrder = sortOrder;
             pick.Enabled = enabled;
 
             object Pick = (object)pick;
-            if(!JsonRpcRequest(ref Pick, "picks_update", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Pick, "picks_update", serverURI, UUID.Random().ToString()))
             {
                 remoteClient.SendAgentAlertMessage(
                         "Error updating pick", false);
+                return;
             }
 
             m_log.DebugFormat("[PROFILES]: Finish PickInfoUpdate {0} {1}", pick.Name, pick.PickId.ToString());
@@ -727,10 +794,11 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             OSDMap parameters= new OSDMap();
             parameters.Add("pickId", OSD.FromUUID(queryPickID));
             OSD Params = (OSD)parameters;
-            if(!JsonRpcRequest(ref Params, "picks_delete", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Params, "picks_delete", serverURI, UUID.Random().ToString()))
             {
                 remoteClient.SendAgentAlertMessage(
                         "Error picks delete", false);
+                return;
             }
         }
         #endregion Picks
@@ -762,7 +830,7 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             UUID.TryParse(args[0], out note.TargetId);
 
             object Note = (object)note;
-            if(!JsonRpcRequest(ref Note, "avatarnotesrequest", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Note, "avatarnotesrequest", serverURI, UUID.Random().ToString()))
             {
                 remoteClient.SendAvatarNotesReply(note.TargetId, note.Notes);
                 return;
@@ -796,8 +864,10 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             GetUserProfileServerURI(remoteClient.AgentId, out serverURI);
 
             object Note = note;
-            if(!JsonRpcRequest(ref Note, "avatar_notes_update", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Note, "avatar_notes_update", serverURI, UUID.Random().ToString()))
             {
+                remoteClient.SendAgentAlertMessage(
+                        "Error updating note", false);
                 return;
             }
         }
@@ -828,7 +898,7 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             bool foreign = GetUserProfileServerURI(remoteClient.AgentId, out serverURI);
 
             object Pref = pref;
-            if(!JsonRpcRequest(ref Pref, "user_preferences_update", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Pref, "user_preferences_update", serverURI, UUID.Random().ToString()))
             {
                 m_log.InfoFormat("[PROFILES]: UserPreferences update error");
                 remoteClient.SendAgentAlertMessage("Error updating preferences", false);
@@ -853,10 +923,10 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
 
 
             object Pref = (object)pref;
-            if(!JsonRpcRequest(ref Pref, "user_preferences_request", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Pref, "user_preferences_request", serverURI, UUID.Random().ToString()))
             {
-                m_log.InfoFormat("[PROFILES]: UserPreferences request error");
-                remoteClient.SendAgentAlertMessage("Error requesting preferences", false);
+//                m_log.InfoFormat("[PROFILES]: UserPreferences request error");
+//                remoteClient.SendAgentAlertMessage("Error requesting preferences", false);
                 return;
             }
             pref = (UserPreferences) Pref;
@@ -903,16 +973,17 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             GetUserProfileServerURI(remoteClient.AgentId, out serverURI);
 
             object Param = prop;
-            if(!JsonRpcRequest(ref Param, "avatar_interests_update", serverURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Param, "avatar_interests_update", serverURI, UUID.Random().ToString()))
             {
                 remoteClient.SendAgentAlertMessage(
                         "Error updating interests", false);
+                return;
             }
         }
 
         public void RequestAvatarProperties(IClientAPI remoteClient, UUID avatarID)
         {
-            if ( String.IsNullOrEmpty(avatarID.ToString()) || String.IsNullOrEmpty(remoteClient.AgentId.ToString()))
+            if (String.IsNullOrEmpty(avatarID.ToString()) || String.IsNullOrEmpty(remoteClient.AgentId.ToString()))
             {
                 // Looking for a reason that some viewers are sending null Id's
                 m_log.DebugFormat("[PROFILES]: This should not happen remoteClient.AgentId {0} - avatarID {1}", remoteClient.AgentId, avatarID);
@@ -989,7 +1060,12 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             string result = string.Empty;
 
             props.UserId = avatarID;
-            GetProfileData(ref props, out result);
+
+            if (!GetProfileData(ref props, foreign, out result))
+            {
+//                m_log.DebugFormat("Error getting profile for {0}: {1}", avatarID, result);
+                return;
+            }
 
             remoteClient.SendAvatarProperties(props.UserId, props.AboutText, born, charterMember , props.FirstLifeText, flags,
                                               props.FirstLifeImageId, props.ImageId, props.WebUrl, props.PartnerId);
@@ -1026,10 +1102,11 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
 
                 object Prop = prop;
 
-                if(!JsonRpcRequest(ref Prop, "avatar_properties_update", serverURI, UUID.Random().ToString()))
+                if(!rpc.JsonRpcRequest(ref Prop, "avatar_properties_update", serverURI, UUID.Random().ToString()))
                 {
                     remoteClient.SendAgentAlertMessage(
                             "Error updating properties", false);
+                    return;
                 }
 
                 RequestAvatarProperties(remoteClient, newProfile.ID);
@@ -1042,10 +1119,7 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
         /// <returns>
         /// The profile data.
         /// </returns>
-        /// <param name='userID'>
-        /// User I.
-        /// </param>
-        bool GetProfileData(ref UserProfileProperties properties, out string message)
+        bool GetProfileData(ref UserProfileProperties properties, bool foreign, out string message)
         {
             // Can't handle NPC yet...
             ScenePresence p = FindPresence(properties.UserId);
@@ -1064,14 +1138,49 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
 
             // This is checking a friend on the home grid
             // Not HG friend
-            if ( String.IsNullOrEmpty(serverURI))
+            if (String.IsNullOrEmpty(serverURI))
             {
                 message = "No Presence - foreign friend";
                 return false;
             }
 
             object Prop = (object)properties;
-            JsonRpcRequest(ref Prop, "avatar_properties_request", serverURI, UUID.Random().ToString());
+            if (!rpc.JsonRpcRequest(ref Prop, "avatar_properties_request", serverURI, UUID.Random().ToString()))
+            {
+                // If it's a foreign user then try again using OpenProfile, in case that's what the grid is using
+                bool secondChanceSuccess = false;
+                if (foreign)
+                {
+                    try
+                    {
+                        OpenProfileClient client = new OpenProfileClient(serverURI);
+                        if (client.RequestAvatarPropertiesUsingOpenProfile(ref properties))
+                            secondChanceSuccess = true;
+                    }
+                    catch (Exception e)
+                    {
+                        m_log.Debug(
+                            string.Format(
+                                "[PROFILES]: Request using the OpenProfile API for user {0} to {1} failed", 
+                                properties.UserId, serverURI),
+                            e);
+
+                        // Allow the return 'message' to say "JsonRpcRequest" and not "OpenProfile", because
+                        // the most likely reason that OpenProfile failed is that the remote server
+                        // doesn't support OpenProfile, and that's not very interesting.
+                    }
+                }
+
+                if (!secondChanceSuccess)
+                {
+                    message = string.Format("JsonRpcRequest for user {0} to {1} failed", properties.UserId, serverURI);
+                    m_log.DebugFormat("[PROFILES]: {0}", message);
+
+                    return false;
+                }
+                // else, continue below
+            }
+            
             properties = (UserProfileProperties)Prop;
 
             message = "Success";
@@ -1092,25 +1201,36 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
 
             assetServerURI = UserManagementModule.GetUserServerURL(avatarId, "AssetServerURI");
 
+            if(string.IsNullOrEmpty(profileServerURI) || string.IsNullOrEmpty(assetServerURI))
+                return false;
+
             OSDMap parameters= new OSDMap();
             parameters.Add("avatarId", OSD.FromUUID(avatarId));
             OSD Params = (OSD)parameters;
-            if(!JsonRpcRequest(ref Params, "image_assets_request", profileServerURI, UUID.Random().ToString()))
+            if(!rpc.JsonRpcRequest(ref Params, "image_assets_request", profileServerURI, UUID.Random().ToString()))
             {
                 return false;
             }
             
             parameters = (OSDMap)Params;
-            
-            OSDArray list = (OSDArray)parameters["result"];
-            
-            foreach(OSD asset in list)
-            {
-                OSDString assetId = (OSDString)asset;
 
-                Scene.AssetService.Get(string.Format("{0}/{1}",assetServerURI, assetId.AsString()));
+            if (parameters.ContainsKey("result"))
+            {
+                OSDArray list = (OSDArray)parameters["result"];
+
+                foreach (OSD asset in list)
+                {
+                    OSDString assetId = (OSDString)asset;
+
+                    Scene.AssetService.Get(string.Format("{0}/{1}", assetServerURI, assetId.AsString()));
+                }
+                return true;
             }
-            return true;
+            else
+            {
+                m_log.ErrorFormat("[PROFILES]: Problematic response for image_assets_request from {0}", profileServerURI);
+                return false;
+            }
         }
 
         /// <summary>
@@ -1164,7 +1284,16 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
 
                 UserAgentServiceConnector uConn = new UserAgentServiceConnector(home_url);
 
-                Dictionary<string, object> account = uConn.GetUserInfo(userID);
+                Dictionary<string, object> account;
+                try
+                {
+                    account = uConn.GetUserInfo(userID);
+                }
+                catch (Exception e)
+                {
+                    m_log.Debug("[PROFILES]: GetUserInfo call failed ", e);
+                    account = new Dictionary<string, object>();
+                }
 
                 if (account.Count > 0)
                 {
@@ -1188,6 +1317,37 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
                 }
                 userInfo = info;
                 return true;
+            }
+        }
+
+        /// <summary>
+        /// Gets the user gatekeeper server URI.
+        /// </summary>
+        /// <returns>
+        /// The user gatekeeper server URI.
+        /// </returns>
+        /// <param name='userID'>
+        /// If set to <c>true</c> user URI.
+        /// </param>
+        /// <param name='serverURI'>
+        /// If set to <c>true</c> server URI.
+        /// </param>
+        bool GetUserGatekeeperURI(UUID userID, out string serverURI)
+        {
+            bool local;
+            local = UserManagementModule.IsLocalGridUser(userID);
+            
+            if (!local)
+            {
+                serverURI = UserManagementModule.GetUserServerURL(userID, "GatekeeperURI");
+                // Is Foreign
+                return true;
+            }
+            else
+            {
+                serverURI = MyGatekeeper;
+                // Is local
+                return false;
             }
         }
 
@@ -1242,169 +1402,5 @@ namespace OpenSim.Region.OptionalModules.Avatar.UserProfiles
             return null;
         }
         #endregion Util
-
-        #region Web Util
-        /// <summary>
-        /// Sends json-rpc request with a serializable type.
-        /// </summary>
-        /// <returns>
-        /// OSD Map.
-        /// </returns>
-        /// <param name='parameters'>
-        /// Serializable type .
-        /// </param>
-        /// <param name='method'>
-        /// Json-rpc method to call.
-        /// </param>
-        /// <param name='uri'>
-        /// URI of json-rpc service.
-        /// </param>
-        /// <param name='jsonId'>
-        /// Id for our call.
-        /// </param>
-        bool JsonRpcRequest(ref object parameters, string method, string uri, string jsonId)
-        {
-            if (jsonId == null)
-                throw new ArgumentNullException ("jsonId");
-            if (uri == null)
-                throw new ArgumentNullException ("uri");
-            if (method == null)
-                throw new ArgumentNullException ("method");
-            if (parameters == null)
-                throw new ArgumentNullException ("parameters");
-
-            // Prep our payload
-            OSDMap json = new OSDMap();
-
-            json.Add("jsonrpc", OSD.FromString("2.0"));
-            json.Add("id", OSD.FromString(jsonId));
-            json.Add("method", OSD.FromString(method));
-
-            json.Add("params", OSD.SerializeMembers(parameters));
-
-            string jsonRequestData = OSDParser.SerializeJsonString(json);
-            byte[] content = Encoding.UTF8.GetBytes(jsonRequestData);
-
-            HttpWebRequest webRequest = (HttpWebRequest)WebRequest.Create(uri);
-
-            webRequest.ContentType = "application/json-rpc";
-            webRequest.Method = "POST";
-
-            Stream dataStream = webRequest.GetRequestStream();
-            dataStream.Write(content, 0, content.Length);
-            dataStream.Close();
-
-            WebResponse webResponse = null;
-            try
-            {
-                webResponse = webRequest.GetResponse();
-            }
-            catch (WebException e)
-            {
-                Console.WriteLine("Web Error" + e.Message);
-                Console.WriteLine ("Please check input");
-                return false;
-            }
-
-            Stream rstream = webResponse.GetResponseStream();
-              
-            OSDMap mret = new OSDMap();
-            try
-            {
-                mret = (OSDMap)OSDParser.DeserializeJson(rstream);
-            }
-            catch (Exception e)
-            {
-                m_log.DebugFormat("[PROFILES]: JsonRpcRequest Error {0} - remote user with legacy profiles?", e.Message);
-                return false;
-            }
-
-
-            if (mret.ContainsKey("error"))
-                return false;
-            
-            // get params...
-            OSD.DeserializeMembers(ref parameters, (OSDMap) mret["result"]);
-            return true;
-        }
-
-        /// <summary>
-        /// Sends json-rpc request with OSD parameter.
-        /// </summary>
-        /// <returns>
-        /// The rpc request.
-        /// </returns>
-        /// <param name='data'>
-        /// data - incoming as parameters, outgong as result/error
-        /// </param>
-        /// <param name='method'>
-        /// Json-rpc method to call.
-        /// </param>
-        /// <param name='uri'>
-        /// URI of json-rpc service.
-        /// </param>
-        /// <param name='jsonId'>
-        /// If set to <c>true</c> json identifier.
-        /// </param>
-        bool JsonRpcRequest(ref OSD data, string method, string uri, string jsonId)
-        {
-            OSDMap map = new OSDMap();
-
-            map["jsonrpc"] = "2.0";
-            if(string.IsNullOrEmpty(jsonId))
-                map["id"] = UUID.Random().ToString();
-            else
-                map["id"] = jsonId;
-
-            map["method"] = method;
-            map["params"] = data;
-
-            string jsonRequestData = OSDParser.SerializeJsonString(map);
-            byte[] content = Encoding.UTF8.GetBytes(jsonRequestData);
-
-            HttpWebRequest webRequest = (HttpWebRequest)WebRequest.Create(uri);
-            webRequest.ContentType = "application/json-rpc";
-            webRequest.Method = "POST";
-
-            Stream dataStream = webRequest.GetRequestStream();
-            dataStream.Write(content, 0, content.Length);
-            dataStream.Close();
-
-            WebResponse webResponse = null;
-            try
-            {
-                webResponse = webRequest.GetResponse();
-            }
-            catch (WebException e)
-            {
-                Console.WriteLine("Web Error" + e.Message);
-                Console.WriteLine ("Please check input");
-                return false;
-            }
-
-            Stream rstream = webResponse.GetResponseStream();
-
-            OSDMap response = new OSDMap();
-            try
-            {
-                response = (OSDMap)OSDParser.DeserializeJson(rstream);
-            }
-            catch (Exception e)
-            {
-                m_log.DebugFormat("[PROFILES]: JsonRpcRequest Error {0} - remote user with legacy profiles?", e.Message);
-                return false;
-            }
-
-            if(response.ContainsKey("error"))
-            {
-                data = response["error"];
-                return false;
-            }
-
-            data = response;
-
-            return true;
-        }
-        #endregion Web Util
     }
 }

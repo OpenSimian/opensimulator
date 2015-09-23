@@ -400,6 +400,10 @@ namespace OpenSim.Region.Framework.Scenes
 
         private UUID RestoreSavedScriptState(UUID loadedID, UUID oldID, UUID newID)
         {
+//            m_log.DebugFormat(
+//                "[PRIM INVENTORY]: Restoring scripted state for item {0}, oldID {1}, loadedID {2}", 
+//                newID, oldID, loadedID);
+
             IScriptModule[] engines = m_part.ParentGroup.Scene.RequestModuleInterfaces<IScriptModule>();
             if (engines.Length == 0) // No engine at all
                 return oldID;
@@ -412,7 +416,7 @@ namespace OpenSim.Region.Framework.Scenes
                 XmlDocument doc = new XmlDocument();
 
                 doc.LoadXml(m_part.ParentGroup.m_savedScriptState[stateID]);
-                
+
                 ////////// CRUFT WARNING ///////////////////////////////////
                 //
                 // Old objects will have <ScriptState><State> ...
@@ -441,6 +445,8 @@ namespace OpenSim.Region.Framework.Scenes
 
                     // This created document has only the minimun data
                     // necessary for XEngine to parse it successfully
+
+//                    m_log.DebugFormat("[PRIM INVENTORY]: Adding legacy state {0} in {1}", stateID, newID);
 
                     m_part.ParentGroup.m_savedScriptState[stateID] = newDoc.OuterXml;
                 }
@@ -751,7 +757,7 @@ namespace OpenSim.Region.Framework.Scenes
             Vector3 bbox;
             float offsetHeight;
 
-            bool single = m_part.ParentGroup.Scene.GetObjectsToRez(rezAsset.Data, false, out objlist, out veclist, out bbox, out offsetHeight);
+            m_part.ParentGroup.Scene.GetObjectsToRez(rezAsset.Data, false, out objlist, out veclist, out bbox, out offsetHeight);
 
             for (int i = 0; i < objlist.Count; i++)
             {
@@ -764,48 +770,27 @@ namespace OpenSim.Region.Framework.Scenes
                 // Since renaming the item in the inventory does not affect the name stored
                 // in the serialization, transfer the correct name from the inventory to the
                 // object itself before we rez.
-                rootPart.Name = item.Name;
-                rootPart.Description = item.Description;
-
-                SceneObjectPart[] partList = group.Parts;
+                // Only do these for the first object if we are rezzing a coalescence.
+                if (i == 0)
+                {
+                    rootPart.Name = item.Name;
+                    rootPart.Description = item.Description;
+                }
 
                 group.SetGroup(m_part.GroupID, null);
 
-                // TODO: Remove magic number badness
-                if ((rootPart.OwnerID != item.OwnerID) || (item.CurrentPermissions & 16) != 0 || (item.Flags & (uint)InventoryItemFlags.ObjectSlamPerm) != 0) // Magic number
+                foreach (SceneObjectPart part in group.Parts)
                 {
-                    if (m_part.ParentGroup.Scene.Permissions.PropagatePermissions())
-                    {
-                        foreach (SceneObjectPart part in partList)
-                        {
-                            if ((item.Flags & (uint)InventoryItemFlags.ObjectOverwriteEveryone) != 0)
-                                part.EveryoneMask = item.EveryonePermissions;
-                            if ((item.Flags & (uint)InventoryItemFlags.ObjectOverwriteNextOwner) != 0)
-                                part.NextOwnerMask = item.NextPermissions;
-                            if ((item.Flags & (uint)InventoryItemFlags.ObjectOverwriteGroup) != 0)
-                                part.GroupMask = item.GroupPermissions;
-                        }
+                    // Convert between InventoryItem classes. You can never have too many similar but slightly different classes :)
+                    InventoryItemBase dest = new InventoryItemBase(item.ItemID, item.OwnerID);
+                    dest.BasePermissions = item.BasePermissions;
+                    dest.CurrentPermissions = item.CurrentPermissions;
+                    dest.EveryOnePermissions = item.EveryonePermissions;
+                    dest.GroupPermissions = item.GroupPermissions;
+                    dest.NextPermissions = item.NextPermissions;
+                    dest.Flags = item.Flags;
 
-                        group.ApplyNextOwnerPermissions();
-                    }
-                }
-
-                foreach (SceneObjectPart part in partList)
-                {
-                    // TODO: Remove magic number badness
-                    if ((part.OwnerID != item.OwnerID) || (item.CurrentPermissions & 16) != 0 || (item.Flags & (uint)InventoryItemFlags.ObjectSlamPerm) != 0) // Magic number
-                    {
-                        part.LastOwnerID = part.OwnerID;
-                        part.OwnerID = item.OwnerID;
-                        part.Inventory.ChangeInventoryOwner(item.OwnerID);
-                    }
-
-                    if ((item.Flags & (uint)InventoryItemFlags.ObjectOverwriteEveryone) != 0)
-                        part.EveryoneMask = item.EveryonePermissions;
-                    if ((item.Flags & (uint)InventoryItemFlags.ObjectOverwriteNextOwner) != 0)
-                        part.NextOwnerMask = item.NextPermissions;
-                    if ((item.Flags & (uint)InventoryItemFlags.ObjectOverwriteGroup) != 0)
-                        part.GroupMask = item.GroupPermissions;
+                    part.ApplyPermissionsOnRez(dest, false, m_part.ParentGroup.Scene);
                 }
 
                 rootPart.TrimPermissions();
@@ -891,8 +876,8 @@ namespace OpenSim.Region.Framework.Scenes
                 int type = m_items[itemID].InvType;
                 if (type == 10) // Script
                 {
-                    m_part.RemoveScriptEvents(itemID);
-                    m_part.ParentGroup.Scene.EventManager.TriggerRemoveScript(m_part.LocalId, itemID);
+                    // route it through here, to handle script cleanup tasks
+                    RemoveScriptInstance(itemID, false);
                 }
                 m_items.Remove(itemID);
                 m_inventorySerial++;
@@ -1130,25 +1115,6 @@ namespace OpenSim.Region.Framework.Scenes
                         mask &= ~((uint)PermissionMask.Transfer >> 13);
                     if ((item.CurrentPermissions & item.NextPermissions & (uint)PermissionMask.Modify) == 0)
                         mask &= ~((uint)PermissionMask.Modify >> 13);
-
-                    if (item.InvType != (int)InventoryType.Object)
-                    {
-                        if ((item.CurrentPermissions & item.NextPermissions & (uint)PermissionMask.Copy) == 0)
-                            mask &= ~((uint)PermissionMask.Copy >> 13);
-                        if ((item.CurrentPermissions & item.NextPermissions & (uint)PermissionMask.Transfer) == 0)
-                            mask &= ~((uint)PermissionMask.Transfer >> 13);
-                        if ((item.CurrentPermissions & item.NextPermissions & (uint)PermissionMask.Modify) == 0)
-                            mask &= ~((uint)PermissionMask.Modify >> 13);
-                    }
-                    else
-                    {
-                        if ((item.CurrentPermissions & ((uint)PermissionMask.Copy >> 13)) == 0)
-                            mask &= ~((uint)PermissionMask.Copy >> 13);
-                        if ((item.CurrentPermissions & ((uint)PermissionMask.Transfer >> 13)) == 0)
-                            mask &= ~((uint)PermissionMask.Transfer >> 13);
-                        if ((item.CurrentPermissions & ((uint)PermissionMask.Modify >> 13)) == 0)
-                            mask &= ~((uint)PermissionMask.Modify >> 13);
-                    }
     
                     if ((item.CurrentPermissions & (uint)PermissionMask.Copy) == 0)
                         mask &= ~(uint)PermissionMask.Copy;
@@ -1172,14 +1138,11 @@ namespace OpenSim.Region.Framework.Scenes
 //                        "[SCENE OBJECT PART INVENTORY]: Applying next permissions {0} to {1} in {2} with current {3}, base {4}, everyone {5}",
 //                        item.NextPermissions, item.Name, m_part.Name, item.CurrentPermissions, item.BasePermissions, item.EveryonePermissions);
 
-                    if (item.InvType == (int)InventoryType.Object && (item.CurrentPermissions & 7) != 0)
+                    if (item.InvType == (int)InventoryType.Object)
                     {
-                        if ((item.CurrentPermissions & ((uint)PermissionMask.Copy >> 13)) == 0)
-                            item.CurrentPermissions &= ~(uint)PermissionMask.Copy;
-                        if ((item.CurrentPermissions & ((uint)PermissionMask.Transfer >> 13)) == 0)
-                            item.CurrentPermissions &= ~(uint)PermissionMask.Transfer;
-                        if ((item.CurrentPermissions & ((uint)PermissionMask.Modify >> 13)) == 0)
-                            item.CurrentPermissions &= ~(uint)PermissionMask.Modify;
+                        uint perms = item.CurrentPermissions;
+                        PermissionsUtil.ApplyFoldedPermissions(perms, ref perms);
+                        item.CurrentPermissions = perms;
                     }
 
                     item.CurrentPermissions &= item.NextPermissions;

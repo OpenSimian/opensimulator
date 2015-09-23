@@ -41,7 +41,7 @@ using OpenSim.Framework.Servers.HttpServer;
 using OpenSim.Framework.Servers;
 
 
-[assembly:AddinRoot("Robust", "0.1")]
+[assembly:AddinRoot("Robust", OpenSim.VersionInfo.VersionNumber)]
 namespace OpenSim.Server.Base
 {
     [TypeExtensionPoint(Path="/Robust/Connector", Name="RobustConnector")]
@@ -89,9 +89,9 @@ namespace OpenSim.Server.Base
             Config = config;
 
             Registry = new AddinRegistry(registryPath, ".");
-            suppress_console_output_(true);
+            //suppress_console_output_(true);
             AddinManager.Initialize(registryPath);
-            suppress_console_output_(false);
+            //suppress_console_output_(false);
             AddinManager.Registry.Update();
             CommandManager commandmanager = new CommandManager(Registry);
             AddinManager.AddExtensionNodeHandler("/Robust/Connector", OnExtensionChanged);
@@ -196,17 +196,19 @@ namespace OpenSim.Server.Base
 
         public static  byte[] SerializeResult(XmlSerializer xs, object data)
         {
-            MemoryStream ms = new MemoryStream();
-            XmlTextWriter xw = new XmlTextWriter(ms, Util.UTF8);
-            xw.Formatting = Formatting.Indented;
-            xs.Serialize(xw, data);
-            xw.Flush();
+            using (MemoryStream ms = new MemoryStream())
+            using (XmlTextWriter xw = new XmlTextWriter(ms, Util.UTF8))
+            {
+                xw.Formatting = Formatting.Indented;
+                xs.Serialize(xw, data);
+                xw.Flush();
 
-            ms.Seek(0, SeekOrigin.Begin);
-            byte[] ret = ms.GetBuffer();
-            Array.Resize(ref ret, (int)ms.Length);
+                ms.Seek(0, SeekOrigin.Begin);
+                byte[] ret = ms.GetBuffer();
+                Array.Resize(ref ret, (int)ms.Length);
 
-            return ret;
+                return ret;
+            }
         }
 
         /// <summary>
@@ -266,7 +268,7 @@ namespace OpenSim.Server.Base
                             && pluginType.ToString() != pluginType.Namespace + "." + className)
                             continue;
                         
-                        Type typeInterface = pluginType.GetInterface(interfaceName, true);
+                        Type typeInterface = pluginType.GetInterface(interfaceName);
 
                         if (typeInterface != null)
                         {
@@ -280,11 +282,11 @@ namespace OpenSim.Server.Base
                             {
                                 if (!(e is System.MissingMethodException))
                                 {
-                                    m_log.ErrorFormat("[SERVER UTILS]: Error loading plugin {0} from {1}. Exception: {2}, {3}",
+                                    m_log.Error(string.Format("[SERVER UTILS]: Error loading plugin {0} from {1}. Exception: {2}",
                                         interfaceName, 
                                         dllName, 
-                                        e.InnerException == null ? e.Message : e.InnerException.Message, 
-                                        e.StackTrace);
+                                        e.InnerException == null ? e.Message : e.InnerException.Message),
+                                            e);
                                 }
                                 m_log.ErrorFormat("[SERVER UTILS]: Error loading plugin {0}: {1} args.Length {2}", dllName, e.Message, args.Length);
                                 return null;

@@ -37,7 +37,6 @@ using OpenSim.Region.ScriptEngine.Shared.Instance;
 using OpenSim.Region.ScriptEngine.Shared.ScriptBase;
 using OpenMetaverse;
 using System;
-using OpenSim.Tests.Common.Mock;
 
 namespace OpenSim.Region.ScriptEngine.Shared.Tests
 {
@@ -66,7 +65,7 @@ namespace OpenSim.Region.ScriptEngine.Shared.Tests
             engine.AddRegion(scene);
 
             m_lslApi = new LSL_Api();
-            m_lslApi.Initialize(engine, part, null, null);
+            m_lslApi.Initialize(engine, part, null);
         }
 
         [Test]

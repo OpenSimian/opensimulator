@@ -32,7 +32,6 @@ using Mono.Addins;
 using Nini.Config;
 using OpenMetaverse;
 using OpenSim.Framework;
-using OpenSim.Framework.Communications;
 using OpenSim.Framework.Servers;
 using OpenSim.Framework.Client;
 using OpenSim.Region.Framework.Interfaces;
@@ -226,12 +225,8 @@ namespace OpenSim.Region.CoreModules.Avatar.InstantMessage
                     return;
             }
 
-            Scene scene = FindScene(new UUID(im.fromAgentID));
-            if (scene == null)
-                scene = m_SceneList[0];
-
             bool success = SynchronousRestObjectRequester.MakeRequest<GridInstantMessage, bool>(
-                    "POST", m_RestURL+"/SaveMessage/", im);
+                    "POST", m_RestURL+"/SaveMessage/", im, 10000);
 
             if (im.dialog == (byte)InstantMessageDialog.MessageFromAgent)
             {

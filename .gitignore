@@ -54,6 +54,7 @@ bin/Regions/*
 bin/UserAssets
 bin/assetcache
 bin/maptiles
+bin/bakes
 bin/estate_settings.xml
 bin/config-include/CenomeCache.ini
 bin/config-include/FlotsamCache.ini
@@ -66,6 +67,12 @@ bin/OpenSim.Grid.InventoryServer.log
 bin/OpenSim.Grid.MessagingServer.log
 bin/OpenSim.Grid.UserServer.log
 bin/OpenSim.log
+bin/OpenSimStats.log
+bin/Robust.log
+bin/RobustStats.log
+bin/OpenSimConsoleHistory.txt
+bin/RobustConsoleHistory.txt
+bin/*.Tests.log
 bin/*.manifest
 bin/crashes/
 Examples/*.dll
@@ -102,3 +109,5 @@ OpenSim/Tests/test-results/
 test-results/
 doc/html
 doc/doxygen.error.log
+
+*.patch

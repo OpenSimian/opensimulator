@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) Contributors, http://opensimulator.org/
  * See CONTRIBUTORS.TXT for a full list of copyright holders.
  *
@@ -41,7 +41,7 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Inventory
         private const double CACHE_EXPIRATION_SECONDS = 3600.0; // 1 hour
 
         private static ExpiringCache<UUID, InventoryFolderBase> m_RootFolders = new ExpiringCache<UUID, InventoryFolderBase>();
-        private static ExpiringCache<UUID, Dictionary<AssetType, InventoryFolderBase>> m_FolderTypes = new ExpiringCache<UUID, Dictionary<AssetType, InventoryFolderBase>>();
+        private static ExpiringCache<UUID, Dictionary<FolderType, InventoryFolderBase>> m_FolderTypes = new ExpiringCache<UUID, Dictionary<FolderType, InventoryFolderBase>>();
         private static ExpiringCache<UUID, InventoryCollection> m_Inventories = new ExpiringCache<UUID, InventoryCollection>();
 
         public void Cache(UUID userID, InventoryFolderBase root)
@@ -58,12 +58,12 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Inventory
             return null;
         }
 
-        public void Cache(UUID userID, AssetType type, InventoryFolderBase folder)
+        public void Cache(UUID userID, FolderType type, InventoryFolderBase folder)
         {
-            Dictionary<AssetType, InventoryFolderBase> ff = null;
+            Dictionary<FolderType, InventoryFolderBase> ff = null;
             if (!m_FolderTypes.TryGetValue(userID, out ff))
             {
-                ff = new Dictionary<AssetType, InventoryFolderBase>();
+                ff = new Dictionary<FolderType, InventoryFolderBase>();
                 m_FolderTypes.Add(userID, ff, CACHE_EXPIRATION_SECONDS);
             }
 
@@ -77,9 +77,9 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Inventory
             }
         }
 
-        public InventoryFolderBase GetFolderForType(UUID userID, AssetType type)
+        public InventoryFolderBase GetFolderForType(UUID userID, FolderType type)
         {
-            Dictionary<AssetType, InventoryFolderBase> ff = null;
+            Dictionary<FolderType, InventoryFolderBase> ff = null;
             if (m_FolderTypes.TryGetValue(userID, out ff))
             {
                 InventoryFolderBase f = null;
@@ -99,14 +99,6 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Inventory
             m_Inventories.AddOrUpdate(userID, inv, 120);
         }
 
-        public InventoryCollection GetUserInventory(UUID userID)
-        {
-            InventoryCollection inv = null;
-            if (m_Inventories.TryGetValue(userID, out inv))
-                return inv;
-            return null;
-        }
-
         public InventoryCollection GetFolderContent(UUID userID, UUID folderID)
         {
             InventoryCollection inv = null;
@@ -114,7 +106,7 @@ namespace OpenSim.Region.CoreModules.ServiceConnectorsOut.Inventory
             if (m_Inventories.TryGetValue(userID, out inv))
             {
                 c = new InventoryCollection();
-                c.UserID = userID;
+                c.OwnerID = userID;
 
                 c.Folders = inv.Folders.FindAll(delegate(InventoryFolderBase f)
                 {

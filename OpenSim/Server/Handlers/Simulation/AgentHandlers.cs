@@ -27,6 +27,7 @@
 
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
 using System.IO.Compression;
@@ -117,7 +118,7 @@ namespace OpenSim.Server.Handlers.Simulation
 
         }
 
-        protected virtual void DoQueryAccess(Hashtable request, Hashtable responsedata, UUID id, UUID regionID)
+        protected virtual void DoQueryAccess(Hashtable request, Hashtable responsedata, UUID agentID, UUID regionID)
         {
             if (m_SimulationService == null)
             {
@@ -132,16 +133,38 @@ namespace OpenSim.Server.Handlers.Simulation
             // m_log.DebugFormat("[AGENT HANDLER]: Received QUERYACCESS with {0}", (string)request["body"]);
             OSDMap args = Utils.GetOSDMap((string)request["body"]);
 
+            bool viaTeleport = true;
+            if (args.ContainsKey("viaTeleport"))
+                viaTeleport = args["viaTeleport"].AsBoolean();
+
             Vector3 position = Vector3.Zero;
             if (args.ContainsKey("position"))
                 position = Vector3.Parse(args["position"].AsString());
+
+            string agentHomeURI = null;
+            if (args.ContainsKey("agent_home_uri"))
+                agentHomeURI = args["agent_home_uri"].AsString();
+
+            string theirVersion = string.Empty;
+            if (args.ContainsKey("my_version"))
+                theirVersion = args["my_version"].AsString();
+
+            List<UUID> features = new List<UUID>();
+
+            if (args.ContainsKey("features"))
+            {
+                OSDArray array = (OSDArray)args["features"];
+
+                foreach (OSD o in array)
+                    features.Add(new UUID(o.AsString()));
+            }
 
             GridRegion destination = new GridRegion();
             destination.RegionID = regionID;
 
             string reason;
             string version;
-            bool result = m_SimulationService.QueryAccess(destination, id, position, out version, out reason);
+            bool result = m_SimulationService.QueryAccess(destination, agentID, agentHomeURI, viaTeleport, position, theirVersion, features, out version, out reason);
 
             responsedata["int_response_code"] = HttpStatusCode.OK;
 
@@ -150,6 +173,12 @@ namespace OpenSim.Server.Handlers.Simulation
             resp["success"] = OSD.FromBoolean(result);
             resp["reason"] = OSD.FromString(reason);
             resp["version"] = OSD.FromString(version);
+
+            OSDArray featuresWanted = new OSDArray();
+            foreach (UUID feature in features)
+                featuresWanted.Add(OSD.FromString(feature.ToString()));
+            
+            resp["features"] = featuresWanted;
 
             // We must preserve defaults here, otherwise a false "success" will not be put into the JSON map!
             responsedata["str_response_string"] = OSDParser.SerializeJsonString(resp, true);
@@ -170,7 +199,8 @@ namespace OpenSim.Server.Handlers.Simulation
             if (action.Equals("release"))
                 ReleaseAgent(regionID, id);
             else
-                Util.FireAndForget(delegate { m_SimulationService.CloseAgent(destination, id, auth_token); });
+                Util.FireAndForget(
+                    o => m_SimulationService.CloseAgent(destination, id, auth_token), null, "AgentHandler.DoAgentDelete");
 
             responsedata["int_response_code"] = HttpStatusCode.OK;
             responsedata["str_response_string"] = "OpenSim agent " + id.ToString();
@@ -232,21 +262,36 @@ namespace OpenSim.Server.Handlers.Simulation
             httpResponse.KeepAlive = false;
             Encoding encoding = Encoding.UTF8;
 
-            Stream inputStream = null;
-            if (httpRequest.ContentType == "application/x-gzip")
-                inputStream = new GZipStream(request, CompressionMode.Decompress);
-            else if (httpRequest.ContentType == "application/json")
-                inputStream = request;
-            else // no go
+            if (httpRequest.ContentType != "application/json")
             {
                 httpResponse.StatusCode = 406;
                 return encoding.GetBytes("false");
             }
 
-            StreamReader reader = new StreamReader(inputStream, encoding);
+            string requestBody;
 
-            string requestBody = reader.ReadToEnd();
-            reader.Close();
+            Stream inputStream = request;
+            Stream innerStream = null;
+            try
+            {
+                if ((httpRequest.ContentType == "application/x-gzip" || httpRequest.Headers["Content-Encoding"] == "gzip") || (httpRequest.Headers["X-Content-Encoding"] == "gzip"))
+                {
+                    innerStream = inputStream;
+                    inputStream = new GZipStream(innerStream, CompressionMode.Decompress);
+                }
+
+                using (StreamReader reader = new StreamReader(inputStream, encoding))
+                {
+                    requestBody = reader.ReadToEnd();
+                }
+            }
+            finally
+            {
+                if (innerStream != null)
+                    innerStream.Dispose();
+                inputStream.Dispose();
+            }
+
             keysvals.Add("body", requestBody);
 
             Hashtable responsedata = new Hashtable();
@@ -304,13 +349,29 @@ namespace OpenSim.Server.Handlers.Simulation
                 return;
             }
 
+            GridRegion source = null;
+
+            if (args.ContainsKey("source_uuid"))
+            {
+                source = new GridRegion();
+                source.RegionLocX = Int32.Parse(args["source_x"].AsString());
+                source.RegionLocY = Int32.Parse(args["source_y"].AsString());
+                source.RegionName = args["source_name"].AsString();
+                source.RegionID = UUID.Parse(args["source_uuid"].AsString());
+                
+                if (args.ContainsKey("source_server_uri"))
+                    source.RawServerURI = args["source_server_uri"].AsString();
+                else
+                    source.RawServerURI = null;
+            }
+
             OSDMap resp = new OSDMap(2);
             string reason = String.Empty;
 
             // This is the meaning of POST agent
             //m_regionClient.AdjustUserInformation(aCircuit);
             //bool result = m_SimulationService.CreateAgent(destination, aCircuit, teleportFlags, out reason);
-            bool result = CreateAgent(gatekeeper, destination, aCircuit, data.flags, data.fromLogin, out reason);
+            bool result = CreateAgent(source, gatekeeper, destination, aCircuit, data.flags, data.fromLogin, out reason);
 
             resp["reason"] = OSD.FromString(reason);
             resp["success"] = OSD.FromBoolean(result);
@@ -384,9 +445,10 @@ namespace OpenSim.Server.Handlers.Simulation
         }
 
         // subclasses can override this
-        protected virtual bool CreateAgent(GridRegion gatekeeper, GridRegion destination, AgentCircuitData aCircuit, uint teleportFlags, bool fromLogin, out string reason)
+        protected virtual bool CreateAgent(GridRegion source, GridRegion gatekeeper, GridRegion destination,
+            AgentCircuitData aCircuit, uint teleportFlags, bool fromLogin, out string reason)
         {
-            return m_SimulationService.CreateAgent(destination, aCircuit, teleportFlags, out reason);
+            return m_SimulationService.CreateAgent(source, destination, aCircuit, teleportFlags, out reason);
         }
     }
 
@@ -433,17 +495,31 @@ namespace OpenSim.Server.Handlers.Simulation
             keysvals.Add("headers", headervals);
             keysvals.Add("querystringkeys", querystringkeys);
 
-            Stream inputStream;
-            if (httpRequest.ContentType == "application/x-gzip")
-                inputStream = new GZipStream(request, CompressionMode.Decompress);
-            else
-                inputStream = request;
-
+            String requestBody;
             Encoding encoding = Encoding.UTF8;
-            StreamReader reader = new StreamReader(inputStream, encoding);
 
-            string requestBody = reader.ReadToEnd();
-            reader.Close();
+            Stream inputStream = request;
+            Stream innerStream = null;
+            try
+            {
+                if ((httpRequest.ContentType == "application/x-gzip" || httpRequest.Headers["Content-Encoding"] == "gzip") || (httpRequest.Headers["X-Content-Encoding"] == "gzip"))
+                {
+                    innerStream = inputStream;
+                    inputStream = new GZipStream(innerStream, CompressionMode.Decompress);
+                }
+
+                using (StreamReader reader = new StreamReader(inputStream, encoding))
+                {
+                    requestBody = reader.ReadToEnd();
+                }
+            }
+            finally
+            {
+                if (innerStream != null)
+                    innerStream.Dispose();
+                inputStream.Dispose();
+            }
+
             keysvals.Add("body", requestBody);
 
             httpResponse.StatusCode = 200;

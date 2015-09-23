@@ -29,6 +29,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -279,6 +280,29 @@ namespace OpenSim.Framework.Servers
                 "debug threadpool status",
                 "Show current debug threadpool parameters.",
                 HandleDebugThreadpoolStatus);
+            
+            m_console.Commands.AddCommand(
+                "Debug", false, "debug threadpool level",
+                "debug threadpool level 0.." + Util.MAX_THREADPOOL_LEVEL,
+                "Turn on logging of activity in the main thread pool.",
+                "Log levels:\n"
+                    + "  0 = no logging\n"
+                    + "  1 = only first line of stack trace; don't log common threads\n"
+                    + "  2 = full stack trace; don't log common threads\n"
+                    + "  3 = full stack trace, including common threads\n",
+                HandleDebugThreadpoolLevel);
+
+//            m_console.Commands.AddCommand(
+//                "Debug", false, "show threadpool calls active",
+//                "show threadpool calls active",
+//                "Show details about threadpool calls that are still active (currently waiting or in progress)",
+//                HandleShowThreadpoolCallsActive);
+
+            m_console.Commands.AddCommand(
+                "Debug", false, "show threadpool calls complete",
+                "show threadpool calls complete",
+                "Show details about threadpool calls that have been completed.",
+                HandleShowThreadpoolCallsComplete);
 
             m_console.Commands.AddCommand(
                 "Debug", false, "force gc",
@@ -341,6 +365,57 @@ namespace OpenSim.Framework.Servers
             WebUtil.SerializeOSDRequestsPerEndpoint = setSerializeOsdRequests;
 
             Notice("serialosdreq is now {0}", setSerializeOsdRequests);
+        }
+
+        private void HandleShowThreadpoolCallsActive(string module, string[] args)
+        {
+            List<KeyValuePair<string, int>> calls = Util.GetFireAndForgetCallsInProgress().ToList();
+            calls.Sort((kvp1, kvp2) => kvp2.Value.CompareTo(kvp1.Value));
+            int namedCalls = 0;
+
+            ConsoleDisplayList cdl = new ConsoleDisplayList();
+            foreach (KeyValuePair<string, int> kvp in calls)
+            {
+                if (kvp.Value > 0)
+                {
+                    cdl.AddRow(kvp.Key, kvp.Value);
+                    namedCalls += kvp.Value;
+                }
+            }
+
+            cdl.AddRow("TOTAL NAMED", namedCalls);
+
+            long allQueuedCalls = Util.TotalQueuedFireAndForgetCalls;
+            long allRunningCalls = Util.TotalRunningFireAndForgetCalls;
+
+            cdl.AddRow("TOTAL QUEUED", allQueuedCalls);
+            cdl.AddRow("TOTAL RUNNING", allRunningCalls);
+            cdl.AddRow("TOTAL ANONYMOUS", allQueuedCalls + allRunningCalls - namedCalls);
+            cdl.AddRow("TOTAL ALL", allQueuedCalls + allRunningCalls);
+
+            MainConsole.Instance.Output(cdl.ToString());
+        }
+
+        private void HandleShowThreadpoolCallsComplete(string module, string[] args)
+        {
+            List<KeyValuePair<string, int>> calls = Util.GetFireAndForgetCallsMade().ToList();
+            calls.Sort((kvp1, kvp2) => kvp2.Value.CompareTo(kvp1.Value));
+            int namedCallsMade = 0;
+
+            ConsoleDisplayList cdl = new ConsoleDisplayList();
+            foreach (KeyValuePair<string, int> kvp in calls)
+            {
+                cdl.AddRow(kvp.Key, kvp.Value);
+                namedCallsMade += kvp.Value;
+            }
+
+            cdl.AddRow("TOTAL NAMED", namedCallsMade);
+
+            long allCallsMade = Util.TotalFireAndForgetCallsMade;
+            cdl.AddRow("TOTAL ANONYMOUS", allCallsMade - namedCallsMade);
+            cdl.AddRow("TOTAL ALL", allCallsMade);
+
+            MainConsole.Instance.Output(cdl.ToString());
         }
 
         private void HandleDebugThreadpoolStatus(string module, string[] args)
@@ -430,6 +505,33 @@ namespace OpenSim.Framework.Servers
                 Notice("Max worker threads now {0}", maxWorkerThreads);
                 Notice("Max IOCP threads now {0}", maxIocpThreads);
             }
+        }
+
+        private static void HandleDebugThreadpoolLevel(string module, string[] cmdparams)
+        {
+            if (cmdparams.Length < 4)
+            {
+                MainConsole.Instance.Output("Usage: debug threadpool level 0.." + Util.MAX_THREADPOOL_LEVEL);
+                return;
+            }
+
+            string rawLevel = cmdparams[3];
+            int newLevel;
+
+            if (!int.TryParse(rawLevel, out newLevel))
+            {
+                MainConsole.Instance.OutputFormat("{0} is not a valid debug level", rawLevel);
+                return;
+            }
+
+            if (newLevel < 0 || newLevel > Util.MAX_THREADPOOL_LEVEL)
+            {
+                MainConsole.Instance.OutputFormat("{0} is outside the valid debug level range of 0.." + Util.MAX_THREADPOOL_LEVEL, newLevel);
+                return;
+            }
+
+            Util.LogThreadPool = newLevel;
+            MainConsole.Instance.OutputFormat("LogThreadPool set to {0}", newLevel);
         }
 
         private void HandleForceGc(string module, string[] args)
